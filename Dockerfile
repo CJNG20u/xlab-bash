@@ -8,13 +8,13 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci || npm install
+RUN npm ci || npm install --no-audit --no-fund || npm install --no-audit --no-fund --legacy-peer-deps
 
 COPY . .
 RUN npm run build
 
-# Prune dev-only build packages while keeping tsx for running server.ts directly
-RUN npm prune --omit=dev && npm install --no-save tsx
+# Drop dev-only packages (tsx stays: it is a runtime dependency that runs server.ts)
+RUN npm prune --omit=dev
 
 # Stage 2: Minimal production runtime
 FROM node:22-bookworm-slim AS runner
