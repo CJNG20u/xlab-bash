@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Sliders,
   TerminalSquare,
   Trash2,
@@ -22,12 +23,14 @@ import type {
   KeyboardLayoutRecord,
   KeyboardMode,
   QuickBarItem,
+  ShellSessionInfo,
   SnippetItem,
 } from '../types/index.ts';
+import { AccountSecurityPanel } from './AccountSecurityPanel.tsx';
 import { KeyboardLayoutEditor } from './KeyboardLayoutEditor.tsx';
 import { PWAInstallButton } from './PWAInstallButton.tsx';
 
-export type SettingsTab = 'display' | 'snippets' | 'quickbar' | 'layout';
+export type SettingsTab = 'display' | 'snippets' | 'quickbar' | 'layout' | 'security';
 
 interface SettingsModalProps {
   initialTab: SettingsTab;
@@ -35,6 +38,10 @@ interface SettingsModalProps {
   snippets: SnippetItem[];
   layouts: KeyboardLayoutRecord[];
   username?: string;
+  envAuthActive: boolean;
+  openSessionKeys: string[];
+  onResumeShell: (info: ShellSessionInfo) => void;
+  onSignedOutEverywhere: () => void;
   onClose: () => void;
   onUpdateSettings: (partial: Partial<AppSettings>) => Promise<void>;
   onSnippetsChange: (snippets: SnippetItem[]) => void;
@@ -49,6 +56,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   snippets,
   layouts,
   username,
+  envAuthActive,
+  openSessionKeys,
+  onResumeShell,
+  onSignedOutEverywhere,
   onClose,
   onUpdateSettings,
   onSnippetsChange,
@@ -159,6 +170,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               { id: 'snippets', label: 'Snippets', icon: TerminalSquare },
               { id: 'quickbar', label: 'Quick Bar', icon: Zap },
               { id: 'layout', label: 'Keyboard Layout', icon: Keyboard },
+              { id: 'security', label: 'Security', icon: ShieldCheck },
             ] as const
           ).map((item) => {
             const Icon = item.icon;
@@ -424,6 +436,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             </div>
+          )}
+
+          {tab === 'security' && (
+            <AccountSecurityPanel
+              envAuthActive={envAuthActive}
+              openSessionKeys={openSessionKeys}
+              onResumeShell={onResumeShell}
+              onSignedOutEverywhere={onSignedOutEverywhere}
+              onToast={onToast}
+            />
           )}
 
           {tab === 'snippets' && (

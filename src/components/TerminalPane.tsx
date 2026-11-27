@@ -19,6 +19,7 @@ import React, {
   useState,
 } from 'react';
 import { api } from '../lib/api.ts';
+import { type SelectAnchor, TextSelectSheet, writeClipboard } from './TextSelectSheet.tsx';
 import { getTerminalTheme } from '../lib/terminalThemes.ts';
 import type {
   ConnectionState,
@@ -34,6 +35,10 @@ export interface TerminalPaneHandle {
   toggleSearch: () => void;
   reconnect: () => void;
   respondHostKey: (accept: boolean) => void;
+  /** Open the touch-friendly text selection sheet */
+  openSelect: () => void;
+  /** Paste from the clipboard (multi-line pastes ask first) */
+  paste: () => void;
 }
 
 interface TerminalPaneProps {
@@ -49,6 +54,7 @@ interface TerminalPaneProps {
     extra?: { errorMessage?: string; reconnectAttempt?: number }
   ) => void;
   onHostKeyPrompt: (sessionId: string, prompt: HostKeyPrompt | null) => void;
+  onSessionKey: (sessionId: string, sessionKey: string | undefined) => void;
   onToast: (message: string) => void;
 }
 
@@ -63,6 +69,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       onFontSizeChange,
       onStatusChange,
       onHostKeyPrompt,
+      onSessionKey,
       onToast,
     },
     ref
@@ -75,6 +82,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
     const reconnectTimerRef = useRef<number | null>(null);
     const reconnectAttemptRef = useRef(0);
     const manualCloseRef = useRef(false);
+    // Server-side shell this tab is bound to, and how many output characters we've rendered.
+    const sessionKeyRef = useRef<string | undefined>(session.sessionKey);
+    const seqRef = useRef(0);
     const fontSizeRef = useRef(fontSize);
     fontSizeRef.current = fontSize;
 
@@ -82,6 +92,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
     const [searchQuery, setSearchQuery] = useState('');
     const [pasteSheetOpen, setPasteSheetOpen] = useState(false);
     const [manualPasteText, setManualPasteText] = useState('');
+    // true when the paste sheet is confirming a multi-line clipboard paste
+    const [pasteNeedsConfirm, setPasteNeedsConfirm] = useState(false);
+    const [selectOpen, setSelectOpen] = useState(false);
+    const [selectAnchor, setSelectAnchor] = useState<SelectAnchor | null>(null);
 
     // Touch pinch-to-zoom & long-press-to-paste state
     const pinchStartDistRef = useRef<number | null>(null);
@@ -176,13 +190,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       let hadTerminalError = false;
       let heartbeat: number | null = null;
 
-      ws.onopen = () => {
+      let sessionEnded = false; // remote shell exited / taken over: don't reconnect
+
+      const sendConnect = (): boolean => {
         const cols = termRef.current?.cols || 80;
         const rows = termRef.current?.rows || 24;
-
         if (session.hostId) {
           ws.send(JSON.stringify({ type: 'connect', hostId: session.hostId, cols, rows }));
-        } else if (session.quickTarget) {
+          return true;
+        }
+        if (session.quickTarget) {
           ws.send(
             JSON.stringify({
               type: 'connect',
@@ -193,10 +210,33 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               password: session.quickTarget.password,
               privateKey: session.quickTarget.privateKey,
               passphrase: session.quickTarget.passphrase,
+              label: session.title,
               cols,
               rows,
             })
           );
+          return true;
+        }
+        return false;
+      };
+
+      ws.onopen = () => {
+        const cols = termRef.current?.cols || 80;
+        const rows = termRef.current?.rows || 24;
+
+        if (sessionKeyRef.current) {
+          // Re-attach to the shell that kept running on the server
+          ws.send(
+            JSON.stringify({
+              type: 'attach',
+              sessionKey: sessionKeyRef.current,
+              since: seqRef.current,
+              cols,
+              rows,
+            })
+          );
+        } else {
+          sendConnect();
         }
 
         heartbeat = window.setInterval(() => {
@@ -216,6 +256,34 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
         if (msg.type === 'data' && typeof msg.data === 'string') {
           termRef.current?.write(msg.data);
+          if (typeof msg.seq === 'number') seqRef.current = msg.seq;
+          return;
+        }
+
+        if (msg.type === 'session' && typeof msg.sessionKey === 'string') {
+          sessionKeyRef.current = msg.sessionKey;
+          onSessionKey(session.id, msg.sessionKey);
+          if (msg.resumed) {
+            hadConnected = true;
+          }
+          return;
+        }
+
+        if (msg.type === 'session-expired') {
+          sessionKeyRef.current = undefined;
+          seqRef.current = 0;
+          onSessionKey(session.id, undefined);
+          if (sendConnect()) {
+            termRef.current?.writeln(
+              `\r\n\x1b[33m[xlab-bash] The previous shell has ended. Starting a new one...\x1b[0m`
+            );
+          } else {
+            hadTerminalError = true;
+            const text = 'This session has ended on the server. Close the tab and connect again.';
+            onStatusChange(session.id, 'error', { errorMessage: text });
+            termRef.current?.writeln(`\r\n\x1b[31m[xlab-bash] ${text}\x1b[0m`);
+            ws.close();
+          }
           return;
         }
 
@@ -260,6 +328,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         if (msg.type === 'closed') {
           const reason = String(msg.message || 'Connection closed.');
           termRef.current?.writeln(`\r\n\x1b[33m[Session Closed] ${reason}\x1b[0m`);
+          if (msg.final || msg.taken) {
+            sessionEnded = true;
+            if (msg.final) {
+              sessionKeyRef.current = undefined;
+              onSessionKey(session.id, undefined);
+            }
+          }
         }
       };
 
@@ -272,8 +347,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
         if (manualCloseRef.current) return;
 
-        // Auto-reconnect on unexpected drops after a session had connected or network hiccup
-        if (hadConnected && !hadTerminalError) {
+        // Auto-reconnect on unexpected drops; the shell is still running on the server
+        // and is re-attached with everything it printed in the meantime.
+        if (!sessionEnded && !hadTerminalError && (hadConnected || sessionKeyRef.current)) {
           const attempt = reconnectAttemptRef.current + 1;
           reconnectAttemptRef.current = attempt;
           const delayMs = Math.min(12_000, 1500 * Math.pow(1.6, attempt - 1));
@@ -290,7 +366,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           onStatusChange(session.id, 'disconnected');
         }
       };
-    }, [clearReconnectTimer, fitAndResize, onHostKeyPrompt, onStatusChange, session]);
+    }, [clearReconnectTimer, fitAndResize, onHostKeyPrompt, onSessionKey, onStatusChange, session]);
 
     // Mount xterm.js instance once per session
     useEffect(() => {
@@ -336,14 +412,31 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       // Copy on select
       const selDisp = term.onSelectionChange(() => {
         const selected = term.getSelection();
-        if (selected && selected.length > 0 && navigator.clipboard?.writeText) {
-          navigator.clipboard
-            .writeText(selected)
-            .then(() => onToast('Copied selection'))
-            .catch(() => {
-              // ignore clipboard permission issues
-            });
+        if (selected && selected.length > 0) {
+          writeClipboard(selected).then((ok) => {
+            if (ok) onToast('Copied selection');
+          });
         }
+      });
+
+      // Desktop shortcuts: Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== 'keydown' || !ev.ctrlKey || !ev.shiftKey) return true;
+        const key = ev.key.toLowerCase();
+        if (key === 'c') {
+          const selected = term.getSelection();
+          if (selected) {
+            writeClipboard(selected).then((ok) => ok && onToast('Copied selection'));
+          }
+          ev.preventDefault();
+          return false;
+        }
+        if (key === 'v') {
+          ev.preventDefault();
+          pasteRef.current();
+          return false;
+        }
+        return true;
       });
 
       // Resize observer for viewport / orientation / keyboard open-close
@@ -371,6 +464,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         selDisp.dispose();
         if (wsRef.current) {
           try {
+            // Tab closed on purpose: end the shell instead of leaving it running
+            if (wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'close' }));
+            }
             wsRef.current.close();
           } catch {
             // ignore
@@ -384,6 +481,26 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session.id]);
+
+    // Phone woke up / network came back: re-attach right away instead of waiting
+    // for the backoff timer (the shell kept running on the server).
+    useEffect(() => {
+      const kick = () => {
+        if (document.visibilityState !== 'visible' || manualCloseRef.current) return;
+        const ws = wsRef.current;
+        const dead = !ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING;
+        if (dead && (reconnectTimerRef.current !== null || sessionKeyRef.current)) {
+          reconnectAttemptRef.current = 0;
+          connectSocket();
+        }
+      };
+      document.addEventListener('visibilitychange', kick);
+      window.addEventListener('online', kick);
+      return () => {
+        document.removeEventListener('visibilitychange', kick);
+        window.removeEventListener('online', kick);
+      };
+    }, [connectSocket]);
 
     // Sync fontSize updates
     useEffect(() => {
@@ -429,6 +546,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           reconnectAttemptRef.current = 0;
           connectSocket();
         },
+        openSelect: () => openSelectAt(),
+        paste: () => triggerPaste(),
         respondHostKey: (accept: boolean) => {
           const ws = wsRef.current;
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -437,26 +556,82 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           onHostKeyPrompt(session.id, null);
         },
       }),
-      [connectSocket, fitAndResize, keyboardMode, onHostKeyPrompt, sendRaw, session.id, syncTextareaInputMode]
+      [
+        connectSocket,
+        fitAndResize,
+        keyboardMode,
+        onHostKeyPrompt,
+        openSelectAt,
+        sendRaw,
+        session.id,
+        syncTextareaInputMode,
+        triggerPaste,
+      ]
     );
 
-    // Long-press to paste + pinch-to-zoom handlers
+    // Paste goes through xterm's paste() so bracketed-paste mode and line
+    // endings are handled like a desktop terminal. Multi-line text could run
+    // several commands at once, so it's shown for review first.
+    const pasteText = useCallback(
+      (text: string, confirmed = false) => {
+        if (!text) return;
+        if (!confirmed && /[\r\n]/.test(text.replace(/[\r\n]+$/, ''))) {
+          setManualPasteText(text);
+          setPasteNeedsConfirm(true);
+          setPasteSheetOpen(true);
+          return;
+        }
+        const term = termRef.current;
+        if (term) {
+          term.paste(text);
+        } else {
+          sendRaw(text);
+        }
+        onToast('Pasted');
+      },
+      [onToast, sendRaw]
+    );
+
     const triggerPaste = useCallback(async () => {
       try {
         if (navigator.clipboard?.readText) {
           const text = await navigator.clipboard.readText();
           if (text) {
-            sendRaw(text);
-            onToast('Pasted clipboard');
+            pasteText(text);
             return;
           }
         }
       } catch {
-        // Fall back to paste sheet when clipboard permission is denied
+        // Clipboard read blocked (plain HTTP or permission denied): use the paste sheet
       }
       setManualPasteText('');
+      setPasteNeedsConfirm(false);
       setPasteSheetOpen(true);
-    }, [onToast, sendRaw]);
+    }, [pasteText]);
+
+    const pasteRef = useRef(triggerPaste);
+    pasteRef.current = triggerPaste;
+
+    /** Open selection mode, optionally at the screen point the user long-pressed. */
+    const openSelectAt = useCallback((clientX?: number, clientY?: number) => {
+      const term = termRef.current;
+      if (!term) return;
+      let anchor: SelectAnchor | null = null;
+      const screen = containerRef.current?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (screen && clientX !== undefined && clientY !== undefined) {
+        const rect = screen.getBoundingClientRect();
+        const cellH = rect.height / term.rows;
+        const cellW = rect.width / term.cols;
+        const rowInView = Math.floor((clientY - rect.top) / cellH);
+        const col = Math.floor((clientX - rect.left) / cellW);
+        if (rowInView >= 0 && rowInView < term.rows && col >= 0) {
+          anchor = { row: term.buffer.active.viewportY + rowInView, col: Math.min(col, term.cols - 1) };
+        }
+      }
+      term.blur();
+      setSelectAnchor(anchor);
+      setSelectOpen(true);
+    }, []);
 
     const clearLongPress = () => {
       if (longPressTimerRef.current !== null) {
@@ -488,8 +663,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               // ignore
             }
           }
-          triggerPaste();
-        }, 550);
+          // Long-press works like any phone app: select the word under the finger
+          const start = longPressStartRef.current;
+          openSelectAt(start?.x, start?.y);
+        }, 500);
       }
     };
 
@@ -625,6 +802,22 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           className="flex-1 min-h-0 w-full bg-black overflow-hidden"
         />
 
+        {/* Touch-friendly text selection (native phone selection handles) */}
+        {selectOpen && termRef.current && (
+          <TextSelectSheet
+            term={termRef.current}
+            fontSize={fontSize}
+            anchor={selectAnchor}
+            onClose={() => {
+              setSelectOpen(false);
+              setSelectAnchor(null);
+            }}
+            onPaste={triggerPaste}
+            onSendText={(text) => pasteText(text, true)}
+            onToast={onToast}
+          />
+        )}
+
         {/* Fallback Paste Modal when browser blocks navigator.clipboard.readText() */}
         {pasteSheetOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
@@ -632,20 +825,29 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
                   <ClipboardPaste className="w-4 h-4 text-accent" />
-                  <span>Paste into Terminal</span>
+                  <span>{pasteNeedsConfirm ? 'Paste multiple lines?' : 'Paste into Terminal'}</span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setPasteSheetOpen(false)}
+                  onClick={() => {
+                    setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
+                  }}
                   className="p-1 text-zinc-400 hover:text-zinc-100"
                   aria-label="Close"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+              {pasteNeedsConfirm && (
+                <p className="mt-2 text-xs text-amber-400/90">
+                  This text has {manualPasteText.split(/\r\n|\r|\n/).length} lines and may run several
+                  commands. Check it, edit if needed, then send.
+                </p>
+              )}
               <textarea
-                autoFocus
-                rows={4}
+                autoFocus={!pasteNeedsConfirm}
+                rows={pasteNeedsConfirm ? 7 : 4}
                 value={manualPasteText}
                 onChange={(e) => setManualPasteText(e.target.value)}
                 placeholder="Long-press here and tap Paste..."
@@ -654,7 +856,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               <div className="mt-3 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setPasteSheetOpen(false)}
+                  onClick={() => {
+                    setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
+                  }}
                   className="h-9 px-3.5 rounded-lg border border-zinc-800 text-xs text-zinc-300 hover:bg-zinc-900"
                 >
                   Cancel
@@ -663,10 +868,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
                   type="button"
                   onClick={() => {
                     if (manualPasteText) {
-                      sendRaw(manualPasteText);
-                      onToast('Pasted text');
+                      pasteText(manualPasteText, true);
                     }
                     setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
                   }}
                   className="h-9 px-4 rounded-lg btn-accent text-xs font-semibold transition"
                 >

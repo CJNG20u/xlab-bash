@@ -1,5 +1,7 @@
 import type {
   AppSettings,
+  RemoteListing,
+  ShellSessionInfo,
   AuthStatus,
   HostPayload,
   HostSummary,
@@ -81,6 +83,89 @@ export const api = {
     await request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
     setMemoryToken(null);
   },
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const res = await request<{ ok: boolean; token: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (res.token) setMemoryToken(res.token);
+    return res;
+  },
+
+  logoutAll: async () => {
+    const res = await request<{ ok: boolean; endedShells: number }>('/api/auth/logout-all', {
+      method: 'POST',
+    });
+    setMemoryToken(null);
+    return res;
+  },
+
+  // Running shells
+  getShellSessions: () =>
+    request<{ sessions: ShellSessionInfo[]; lingerMinutes: number }>('/api/sessions'),
+  killShellSession: (key: string) =>
+    request<{ ok: boolean }>(`/api/sessions/${encodeURIComponent(key)}`, { method: 'DELETE' }),
+
+  // SFTP files
+  listFiles: (hostId: string, path?: string) =>
+    request<RemoteListing>(
+      `/api/hosts/${encodeURIComponent(hostId)}/files${path ? `?path=${encodeURIComponent(path)}` : ''}`
+    ),
+  makeFolder: (hostId: string, dir: string, name: string) =>
+    request<{ ok: boolean; path: string }>(`/api/hosts/${encodeURIComponent(hostId)}/files/mkdir`, {
+      method: 'POST',
+      body: JSON.stringify({ dir, name }),
+    }),
+  renameFile: (hostId: string, path: string, name: string) =>
+    request<{ ok: boolean; path: string }>(`/api/hosts/${encodeURIComponent(hostId)}/files/rename`, {
+      method: 'POST',
+      body: JSON.stringify({ path, name }),
+    }),
+  deleteFile: (hostId: string, path: string) =>
+    request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(hostId)}/files/delete`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  downloadUrl: (hostId: string, path: string) =>
+    `/api/hosts/${encodeURIComponent(hostId)}/files/download?path=${encodeURIComponent(path)}`,
+
+  /** Streams a file to <dir>/<file.name>; XHR so we get upload progress. */
+  uploadFile: (
+    hostId: string,
+    dir: string,
+    file: File,
+    opts: { overwrite?: boolean; onProgress?: (fraction: number) => void; signal?: AbortSignal } = {}
+  ) =>
+    new Promise<{ ok: boolean; path: string }>((resolve, reject) => {
+      const qs = new URLSearchParams({ dir, name: file.name });
+      if (opts.overwrite) qs.set('overwrite', '1');
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', `/api/hosts/${encodeURIComponent(hostId)}/files/upload?${qs.toString()}`);
+      xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      if (memoryToken) xhr.setRequestHeader('Authorization', `Bearer ${memoryToken}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) opts.onProgress?.(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        let data: { error?: string; ok?: boolean; path?: string } | null = null;
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          data = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ ok: true, path: data?.path || '' });
+        } else {
+          reject(new ApiError(data?.error || `Upload failed (${xhr.status})`, xhr.status));
+        }
+      };
+      xhr.onerror = () => reject(new ApiError('Upload failed (network error).', 0));
+      xhr.onabort = () => reject(new ApiError('Upload cancelled.', 499));
+      opts.signal?.addEventListener('abort', () => xhr.abort());
+      xhr.send(file);
+    }),
 
   issueWsTicket: () => request<{ ticket: string }>('/api/ws-ticket', { method: 'POST' }),
 

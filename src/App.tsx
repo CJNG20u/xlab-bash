@@ -12,6 +12,7 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AuthScreen } from './components/AuthScreen.tsx';
 import { DevKeyboard } from './components/DevKeyboard.tsx';
+import { FilesView } from './components/FilesView.tsx';
 import { HostKeyModal } from './components/HostKeyModal.tsx';
 import { HostsView } from './components/HostsView.tsx';
 import { OfflineIndicator } from './components/OfflineIndicator.tsx';
@@ -30,9 +31,69 @@ import type {
   KeyboardLayoutRecord,
   KeyboardMode,
   QuickConnectTarget,
+  ShellSessionInfo,
   SnippetItem,
   TerminalSession,
 } from './types/index.ts';
+
+// Open tabs are remembered (without any credentials) so a page reload or an
+// app restart re-attaches to shells that are still running on the server.
+const TABS_STORAGE_KEY = 'xlab-bash:tabs';
+
+interface StoredTab {
+  id: string;
+  title: string;
+  subtitle: string;
+  hostId?: string;
+  sessionKey: string;
+}
+
+function loadStoredTabs(): TerminalSession[] {
+  try {
+    const raw = window.localStorage.getItem(TABS_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as StoredTab[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t) => t && typeof t.id === 'string' && typeof t.sessionKey === 'string')
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        subtitle: t.subtitle,
+        hostId: t.hostId,
+        sessionKey: t.sessionKey,
+        status: 'connecting' as const,
+        reconnectAttempt: 0,
+        hostKeyPrompt: null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredTabs(sessions: TerminalSession[]): void {
+  try {
+    const tabs: StoredTab[] = sessions
+      .filter((s) => s.sessionKey)
+      .map((s) => ({
+        id: s.id,
+        title: s.title,
+        subtitle: s.subtitle,
+        hostId: s.hostId,
+        sessionKey: s.sessionKey!,
+      }));
+    window.localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(tabs));
+  } catch {
+    // storage unavailable (private mode): tabs just won't survive a reload
+  }
+}
+
+function clearStoredTabs(): void {
+  try {
+    window.localStorage.removeItem(TABS_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
@@ -49,10 +110,12 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
+  const [tabsRestored, setTabsRestored] = useState(false);
   const [activeView, setActiveView] = useState<'hosts' | string>('hosts');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('display');
   const [toast, setToast] = useState<string | null>(null);
+  const [filesHost, setFilesHost] = useState<HostSummary | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
   const paneRefs = useRef<Record<string, TerminalPaneHandle | null>>({});
@@ -95,7 +158,13 @@ export default function App() {
         setAuthStatus(status);
         if (status.authenticated) {
           loadWorkspaceData();
+          const restored = loadStoredTabs();
+          if (restored.length > 0) {
+            setSessions(restored);
+            setActiveView(restored[restored.length - 1].id);
+          }
         }
+        setTabsRestored(true);
       })
       .finally(() => {
         if (mounted) setAuthLoading(false);
@@ -105,13 +174,67 @@ export default function App() {
     };
   }, [loadWorkspaceData]);
 
+  // Keep the remembered tab list in sync (only tabs bound to a running shell)
+  useEffect(() => {
+    if (tabsRestored && authStatus.authenticated) saveStoredTabs(sessions);
+  }, [sessions, tabsRestored, authStatus.authenticated]);
+
   const handleAuthenticated = (status: AuthStatus) => {
     setAuthStatus(status);
     loadWorkspaceData();
+    const restored = loadStoredTabs();
+    if (restored.length > 0) {
+      setSessions(restored);
+      setActiveView(restored[restored.length - 1].id);
+    }
+    setTabsRestored(true);
+  };
+
+  /** Called after "sign out everywhere": the server already ended every shell. */
+  const handleSignedOutEverywhere = async () => {
+    clearStoredTabs();
+    setSessions([]);
+    setActiveView('hosts');
+    setSettingsOpen(false);
+    const status = await api.getAuthStatus();
+    setAuthStatus(status);
+  };
+
+  const handleSessionKey = useCallback((sessionId: string, sessionKey: string | undefined) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId && s.sessionKey !== sessionKey ? { ...s, sessionKey } : s))
+    );
+  }, []);
+
+  /** Open a tab for a shell that is running on the server (e.g. started on another device). */
+  const resumeShell = (info: ShellSessionInfo) => {
+    const existing = sessions.find((s) => s.sessionKey === info.key);
+    if (existing) {
+      setActiveView(existing.id);
+      setSettingsOpen(false);
+      return;
+    }
+    const id = `sess-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setSessions((prev) => [
+      ...prev,
+      {
+        id,
+        title: info.label,
+        subtitle: info.target,
+        hostId: info.hostId,
+        sessionKey: info.key,
+        status: 'connecting',
+        reconnectAttempt: 0,
+        hostKeyPrompt: null,
+      },
+    ]);
+    setActiveView(id);
+    setSettingsOpen(false);
   };
 
   const handleLogout = async () => {
     await api.logout();
+    clearStoredTabs();
     setSessions([]);
     setActiveView('hosts');
     setSettingsOpen(false);
@@ -451,6 +574,7 @@ export default function App() {
             onHostsChange={setHosts}
             onConnectSaved={openSavedHost}
             onConnectQuick={openQuickConnect}
+            onOpenFiles={setFilesHost}
             onToast={showToast}
           />
         )}
@@ -470,6 +594,7 @@ export default function App() {
             onFontSizeChange={(next) => updateSettings({ fontSize: next })}
             onStatusChange={handleStatusChange}
             onHostKeyPrompt={handleHostKeyPrompt}
+            onSessionKey={handleSessionKey}
             onToast={showToast}
           />
         ))}
@@ -485,6 +610,8 @@ export default function App() {
               setSettingsTab('snippets');
               setSettingsOpen(true);
             }}
+            onSelectText={() => activeSession && paneRefs.current[activeSession.id]?.openSelect()}
+            onPaste={() => activeSession && paneRefs.current[activeSession.id]?.paste()}
           />
         )}
 
@@ -516,6 +643,10 @@ export default function App() {
           snippets={snippets}
           layouts={layouts}
           username={authStatus.username}
+          envAuthActive={authStatus.envAuthActive}
+          openSessionKeys={sessions.map((s) => s.sessionKey).filter(Boolean) as string[]}
+          onResumeShell={resumeShell}
+          onSignedOutEverywhere={handleSignedOutEverywhere}
           onClose={() => setSettingsOpen(false)}
           onUpdateSettings={updateSettings}
           onSnippetsChange={setSnippets}
@@ -523,6 +654,11 @@ export default function App() {
           onLogout={handleLogout}
           onToast={showToast}
         />
+      )}
+
+      {/* SFTP File Browser */}
+      {filesHost && (
+        <FilesView host={filesHost} onClose={() => setFilesHost(null)} onToast={showToast} />
       )}
 
       {/* Ephemeral Toast Feedback */}

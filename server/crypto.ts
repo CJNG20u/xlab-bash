@@ -1,32 +1,19 @@
 import crypto from 'crypto';
+import { getEncryptionSecret, isEncryptionKeyPersistent } from './secrets.ts';
 
 const ALGORITHM = 'aes-256-gcm';
 const SALT = 'termdock-aes256-gcm-v1';
 
 let cachedKey: Buffer | null = null;
-let ephemeralKeyWarningLogged = false;
 
 export function isEncryptionKeyConfigured(): boolean {
-  return Boolean(process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.trim().length > 0);
+  return isEncryptionKeyPersistent();
 }
 
 function getEncryptionKey(): Buffer {
   if (cachedKey) return cachedKey;
-
-  const envKey = process.env.ENCRYPTION_KEY?.trim();
-  if (envKey && envKey.length > 0) {
-    cachedKey = crypto.scryptSync(envKey, SALT, 32);
-    return cachedKey;
-  }
-
-  // Ephemeral in-memory key for unconfigured preview sessions (never persisted or hardcoded)
-  if (!ephemeralKeyWarningLogged) {
-    ephemeralKeyWarningLogged = true;
-    console.warn(
-      '[TermDock] ENCRYPTION_KEY is not set. Using an ephemeral in-memory key for this session. Set ENCRYPTION_KEY in .env to persist encrypted SSH credentials across restarts.'
-    );
-  }
-  cachedKey = crypto.randomBytes(32);
+  // From ENCRYPTION_KEY, or generated once and saved in DATA_DIR/secrets.json
+  cachedKey = crypto.scryptSync(getEncryptionSecret(), SALT, 32);
   return cachedKey;
 }
 

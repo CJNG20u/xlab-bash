@@ -1,6 +1,5 @@
 {
-  "name": "TermDock",
-  "description": "Self-hosted, mobile-first web SSH terminal with a built-in 6-row developer keyboard, encrypted credential vault, and PWA support.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "xlab-bash",
+  "description": "Self-hosted, mobile-first web SSH terminal with a built-in developer keyboard, encrypted host vault, and PWA support.",
+  "requestFramePermissions": []
 }

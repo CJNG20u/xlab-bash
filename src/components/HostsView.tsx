@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  FolderOpen,
   KeyRound,
   Lock,
   Pencil,
@@ -22,6 +23,7 @@ interface HostsViewProps {
   onHostsChange: (hosts: HostSummary[]) => void;
   onConnectSaved: (host: HostSummary) => void;
   onConnectQuick: (target: QuickConnectTarget) => void;
+  onOpenFiles: (host: HostSummary) => void;
   onToast: (message: string) => void;
 }
 
@@ -55,6 +57,7 @@ export const HostsView: React.FC<HostsViewProps> = ({
   encryptionKeyConfigured,
   onHostsChange,
   onConnectSaved,
+  onOpenFiles,
   onConnectQuick,
   onToast,
 }) => {
@@ -422,14 +425,31 @@ export const HostsView: React.FC<HostsViewProps> = ({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onConnectSaved(h)}
-                  className="w-full h-11 rounded-xl border btn-accent-outline text-sm font-medium active:scale-[0.98] inline-flex items-center justify-center gap-2 transition"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Connect</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onConnectSaved(h)}
+                    className="flex-1 h-11 rounded-xl border btn-accent-outline text-sm font-medium active:scale-[0.98] inline-flex items-center justify-center gap-2 transition"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Connect</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenFiles(h)}
+                    disabled={!h.hostFingerprint}
+                    title={
+                      h.hostFingerprint
+                        ? 'Browse files (SFTP)'
+                        : 'Connect once and accept the host key to enable file browsing'
+                    }
+                    className="h-11 px-3.5 rounded-xl border border-zinc-800 bg-black text-sm font-medium text-zinc-300 hover:text-zinc-100 hover:border-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98] inline-flex items-center justify-center gap-2 transition"
+                    aria-label={`Browse files on ${h.name}`}
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>Files</span>
+                  </button>
+                </div>
               </div>
             ))}
           </div>

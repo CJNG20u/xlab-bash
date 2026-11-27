@@ -8,20 +8,50 @@ import {
   timingSafeEqualString,
   verifyPasswordHash,
 } from './crypto.ts';
-import { claimAdminOnce, getClaimedAdmin } from './db.ts';
+import { claimAdminOnce, getClaimedAdmin, getConfig, setConfig } from './db.ts';
+import { getJwtSecret } from './secrets.ts';
 
 export const SESSION_COOKIE_NAME = 'termdock_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
-const JWT_SECRET =
-  process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 16
-    ? process.env.JWT_SECRET.trim()
-    : crypto.randomBytes(32).toString('hex');
+// From JWT_SECRET, or generated once and saved in DATA_DIR/secrets.json so
+// sessions survive container restarts.
+const JWT_SECRET = getJwtSecret();
 
 interface SessionPayload {
   sub: string;
+  ep?: number; // session epoch: bumping it revokes every token issued before
   iat?: number;
   exp?: number;
+}
+
+// --- Session epoch (sign out everywhere / password change) ---
+
+type EpochListener = () => void;
+const epochListeners = new Set<EpochListener>();
+
+export function getSessionEpoch(): number {
+  const n = Number(getConfig('session_epoch') || '0');
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+/** Revokes every existing session token and notifies listeners (open sockets close). */
+export function bumpSessionEpoch(): number {
+  const next = getSessionEpoch() + 1;
+  setConfig('session_epoch', String(next));
+  wsTickets.clear();
+  for (const fn of epochListeners) {
+    try {
+      fn();
+    } catch {
+      // ignore listener failures
+    }
+  }
+  return next;
+}
+
+export function onSessionEpochChange(fn: EpochListener): void {
+  epochListeners.add(fn);
 }
 
 // Short-lived single-use tickets for WebSocket handshake authentication
@@ -76,60 +106,70 @@ export function verifyCredentials(username: string, password: string): boolean {
 export function performFirstRunSetup(username: string, password: string): boolean {
   if (isEnvAuthActive()) return false;
   const cleanUser = username.trim();
-  if (cleanUser.length < 2 || cleanUser.length > 64 || password.length < 6) {
+  if (cleanUser.length < 2 || cleanUser.length > 64 || password.length < 10) {
     return false;
   }
   const hashed = hashPassword(password);
   return claimAdminOnce(cleanUser, hashed);
 }
 
+export type ChangePasswordResult = 'ok' | 'env-managed' | 'wrong-password' | 'too-short';
+
+/** Changes the first-run admin password and revokes all other sessions. */
+export function changeAdminPassword(currentPassword: string, newPassword: string): ChangePasswordResult {
+  if (isEnvAuthActive()) return 'env-managed';
+  const claimed = getClaimedAdmin();
+  if (!claimed || !verifyPasswordHash(currentPassword, claimed.passwordHash)) {
+    return 'wrong-password';
+  }
+  if (newPassword.length < 10) return 'too-short';
+  setConfig(
+    'claimed_admin',
+    JSON.stringify({ username: claimed.username, passwordHash: hashPassword(newPassword) })
+  );
+  bumpSessionEpoch();
+  return 'ok';
+}
+
 export function signSessionToken(username: string): string {
-  return jwt.sign({ sub: username }, JWT_SECRET, { expiresIn: SESSION_TTL_SECONDS });
+  return jwt.sign({ sub: username, ep: getSessionEpoch() }, JWT_SECRET, {
+    expiresIn: SESSION_TTL_SECONDS,
+  });
 }
 
 export function verifySessionToken(token: string | undefined | null): string | null {
   if (!token) return null;
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as SessionPayload;
-    return typeof decoded.sub === 'string' ? decoded.sub : null;
+    if (typeof decoded.sub !== 'string') return null;
+    if ((decoded.ep ?? 0) !== getSessionEpoch()) return null; // revoked
+    return decoded.sub;
   } catch {
     return null;
   }
 }
 
-export function setSessionCookie(res: Response, token: string): void {
-  const isSecure =
-    res.req.secure ||
-    res.req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
+// Secure only when the browser actually reached us over HTTPS (directly or via a
+// trusted proxy). A Secure cookie on plain http://<lan-ip>:8022 is silently dropped,
+// which logged you out on every reload. SameSite=Lax keeps the cookie off
+// cross-site requests and WebSocket upgrades started by other sites.
+function cookieAttributes(res: Response): string[] {
+  const isSecure = res.req.secure;
+  return isSecure ? ['HttpOnly', 'Secure', 'SameSite=Lax'] : ['HttpOnly', 'SameSite=Lax'];
+}
 
+export function setSessionCookie(res: Response, token: string): void {
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'Path=/',
     `Max-Age=${SESSION_TTL_SECONDS}`,
-    'HttpOnly',
+    ...cookieAttributes(res),
   ];
-
-  if (isSecure) {
-    parts.push('Secure', 'SameSite=None', 'Partitioned');
-  } else {
-    parts.push('SameSite=Lax');
-  }
-
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 export function clearSessionCookie(res: Response): void {
-  const isSecure =
-    res.req.secure ||
-    res.req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
-  const parts = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'Max-Age=0', 'HttpOnly'];
-  if (isSecure) {
-    parts.push('Secure', 'SameSite=None', 'Partitioned');
-  } else {
-    parts.push('SameSite=Lax');
-  }
+  const parts = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'Max-Age=0', ...cookieAttributes(res)];
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
