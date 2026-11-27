@@ -93,6 +93,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
     // Invisible text field slipped under the finger when you touch an empty spot,
     // so a long-press there gets Android's own "Paste" menu (works on plain HTTP too).
     const pasteCatcherRef = useRef<HTMLTextAreaElement | null>(null);
+    // Transparent, cell-aligned text copy of the screen slipped under the finger when
+    // you touch text, so a long-press there gets the phone's own selection + Copy.
+    const selectLayerRef = useRef<HTMLDivElement | null>(null);
 
     // Touch pinch-to-zoom & long-press-to-paste state
     const pinchStartDistRef = useRef<number | null>(null);
@@ -492,36 +495,19 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session.id]);
 
-    // Native touch selection: keep xterm's right-click handler from grabbing the
-    // long-press (it would focus its hidden textarea and drop the selection), and
-    // pause cursor blinking while text is selected so the row isn't redrawn.
+    // On touch screens a long-press also fires "contextmenu"; xterm would answer it by
+    // focusing its hidden textarea, which steals the long-press from our copy/paste layers.
     useEffect(() => {
       const container = containerRef.current;
       if (!container) return;
       const onContextMenu = (e: Event) => {
         const pointerType = (e as PointerEvent).pointerType;
         if (pointerType === 'touch' || pointerType === 'pen' || window.matchMedia('(pointer: coarse)').matches) {
-          e.stopPropagation(); // not preventDefault: the phone still shows its selection menu
+          e.stopPropagation(); // not preventDefault: the phone still shows its own menu
         }
       };
       container.addEventListener('contextmenu', onContextMenu, true);
-
-      let selecting = false;
-      const onSelectionChange = () => {
-        const term = termRef.current;
-        if (!term) return;
-        const sel = window.getSelection();
-        const now = Boolean(sel && !sel.isCollapsed && sel.anchorNode && container.contains(sel.anchorNode));
-        if (now !== selecting) {
-          selecting = now;
-          term.options.cursorBlink = !now;
-        }
-      };
-      document.addEventListener('selectionchange', onSelectionChange);
-      return () => {
-        container.removeEventListener('contextmenu', onContextMenu, true);
-        document.removeEventListener('selectionchange', onSelectionChange);
-      };
+      return () => container.removeEventListener('contextmenu', onContextMenu, true);
     }, []);
 
     // Phone woke up / network came back: re-attach right away instead of waiting
@@ -608,90 +594,219 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
     const pasteTextRef = useRef(pasteText);
     pasteTextRef.current = pasteText;
+    const onToastRef = useRef(onToast);
+    onToastRef.current = onToast;
+    const pasteRef = useRef(triggerPaste);
+    pasteRef.current = triggerPaste;
 
-    // Long-press = phone-native copy / paste:
-    //  - on text: the phone selects it (handles + Copy menu)
-    //  - on an empty spot: an invisible text field sits under the finger, so the
-    //    phone shows its own "Paste" menu, and the paste goes into the shell
+    // Long-press = phone-native copy / paste, with no extra screens:
+    //  - finger on text: a transparent text copy of the screen (aligned cell by cell)
+    //    is placed under it, so the phone's long-press selects real text with its own
+    //    handles, magnifier and Copy menu
+    //  - finger on an empty spot: an invisible text field is placed under it, so the
+    //    phone shows its own "Paste" menu (works on plain HTTP too)
+    // Both are placed synchronously on touchstart, before the browser decides what
+    // the long-press hits, and removed again after a plain tap or scroll.
     useEffect(() => {
       const container = containerRef.current;
       const pane = paneRef.current;
       const catcher = pasteCatcherRef.current;
-      if (!container || !pane || !catcher) return;
+      const layer = selectLayerRef.current;
+      if (!container || !pane || !catcher || !layer) return;
 
-      const hide = () => {
+      let fingerDown = false;
+      let touchStartedAt = 0;
+      const measureCanvas = document.createElement('canvas');
+
+      const hideCatcher = () => {
         catcher.style.display = 'none';
         catcher.value = '';
       };
+      const layerHasSelection = () => {
+        const sel = window.getSelection();
+        return Boolean(sel && !sel.isCollapsed && sel.anchorNode && layer.contains(sel.anchorNode));
+      };
+      const hideLayer = () => {
+        if (layer.style.display === 'none') return;
+        if (layerHasSelection()) window.getSelection()?.removeAllRanges();
+        layer.style.display = 'none';
+        layer.replaceChildren();
+      };
 
-      const isBlankAt = (clientX: number, clientY: number): boolean => {
+      const grid = () => {
         const term = termRef.current;
         const screen = container.querySelector('.xterm-screen') as HTMLElement | null;
-        if (!term || !screen) return false;
+        if (!term || !screen) return null;
         const rect = screen.getBoundingClientRect();
-        const row = Math.floor((clientY - rect.top) / (rect.height / term.rows));
-        const col = Math.floor((clientX - rect.left) / (rect.width / term.cols));
-        if (row < 0 || col < 0) return false;
-        if (row >= term.rows || col >= term.cols) return true; // padding around the grid
-        const line = term.buffer.active.getLine(term.buffer.active.viewportY + row);
-        const ch = line?.getCell(col)?.getChars() ?? '';
-        return ch.trim() === '';
+        if (!rect.width || !rect.height) return null;
+        return { term, rect, cellW: rect.width / term.cols, cellH: rect.height / term.rows };
+      };
+
+      const isBlankAt = (clientX: number, clientY: number): boolean => {
+        const g = grid();
+        if (!g) return false;
+        const row = Math.floor((clientY - g.rect.top) / g.cellH);
+        const col = Math.floor((clientX - g.rect.left) / g.cellW);
+        if (row < 0 || col < 0 || row >= g.term.rows || col >= g.term.cols) return true;
+        const line = g.term.buffer.active.getLine(g.term.buffer.active.viewportY + row);
+        return (line?.getCell(col)?.getChars() ?? '').trim() === '';
+      };
+
+      const showLayer = () => {
+        const g = grid();
+        if (!g) return;
+        const { term, rect, cellW, cellH } = g;
+        const p = pane.getBoundingClientRect();
+        const fontSize = term.options.fontSize ?? 14;
+        const fontFamily = term.options.fontFamily ?? 'monospace';
+        const fontWeight = String(term.options.fontWeight ?? 'normal');
+        // Stretch each character to exactly one cell
+        const ctx = measureCanvas.getContext('2d');
+        let charW = cellW;
+        if (ctx) {
+          ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+          charW = ctx.measureText('W'.repeat(40)).width / 40;
+        }
+        Object.assign(layer.style, {
+          display: 'block',
+          left: `${rect.left - p.left}px`,
+          top: `${rect.top - p.top}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          fontFamily,
+          fontSize: `${fontSize}px`,
+          fontWeight,
+          letterSpacing: `${cellW - charW}px`,
+          lineHeight: `${cellH}px`,
+        });
+        const buf = term.buffer.active;
+        const rows: HTMLDivElement[] = [];
+        for (let y = 0; y < term.rows; y++) {
+          const line = buf.getLine(buf.viewportY + y);
+          const div = document.createElement('div');
+          div.style.height = `${cellH}px`;
+          // Untrimmed so every character sits on its own cell
+          div.textContent = line ? line.translateToString(false) : '';
+          if (line?.isWrapped) div.dataset.wrapped = '1';
+          rows.push(div);
+        }
+        layer.replaceChildren(...rows);
       };
 
       const onTouchStart = (e: TouchEvent) => {
+        fingerDown = true;
+        touchStartedAt = Date.now();
         if (e.touches.length !== 1) {
-          if (document.activeElement !== catcher) hide();
+          if (document.activeElement !== catcher) hideCatcher();
+          hideLayer();
           return;
         }
         const t = e.touches[0];
-        if (!isBlankAt(t.clientX, t.clientY)) {
-          if (document.activeElement !== catcher) hide();
-          return;
-        }
-        // Must happen synchronously, before the browser decides what the long-press hits
         const p = pane.getBoundingClientRect();
-        catcher.style.left = `${t.clientX - p.left - 28}px`;
-        catcher.style.top = `${t.clientY - p.top - 28}px`;
-        catcher.style.display = 'block';
+        if (isBlankAt(t.clientX, t.clientY)) {
+          hideLayer();
+          catcher.style.left = `${t.clientX - p.left - 28}px`;
+          catcher.style.top = `${t.clientY - p.top - 28}px`;
+          catcher.style.display = 'block';
+        } else {
+          if (document.activeElement !== catcher) hideCatcher();
+          showLayer();
+        }
       };
 
-      // A plain tap or a scroll must not leave the field in the way
-      const onTouchEnd = () => {
+      // After a plain tap or a scroll, nothing may stay in the way. A quick tap is
+      // cleared right away (before its click is delivered, so taps still reach the
+      // terminal); after a long-press the phone's menu may be open, so wait for it.
+      const onTouchEnd = (e: TouchEvent) => {
+        if (e.touches.length > 0) return;
+        fingerDown = false;
+        const wasTap = Date.now() - touchStartedAt < 450;
+        if (wasTap) {
+          if (document.activeElement !== catcher) hideCatcher();
+          if (!layerHasSelection()) hideLayer();
+          return;
+        }
         window.setTimeout(() => {
-          if (document.activeElement !== catcher) hide();
+          if (!layerHasSelection()) hideLayer();
         }, 0);
       };
 
-      const finish = (text: string) => {
+      // Selection cleared (tap elsewhere, Copy done): put the live terminal back
+      const onSelectionChange = () => {
+        if (!fingerDown && layer.style.display !== 'none' && !layerHasSelection()) hideLayer();
+      };
+
+      // Copy: wrapped rows join back into one line, trailing padding is trimmed
+      const onCopy = (e: ClipboardEvent) => {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return;
+        const range = sel.getRangeAt(0);
+        const rowEls = Array.from(layer.children) as HTMLElement[];
+        const parts: string[] = [];
+        let any = false;
+        rowEls.forEach((row, i) => {
+          if (!range.intersectsNode(row)) return;
+          const text = row.textContent || '';
+          let start = 0;
+          let end = text.length;
+          if (row.contains(range.startContainer)) start = range.startOffset;
+          if (row.contains(range.endContainer)) end = range.endOffset;
+          let piece = text.slice(start, end);
+          const nextWraps = rowEls[i + 1]?.dataset.wrapped === '1';
+          if (!nextWraps) piece = piece.replace(/\s+$/, '');
+          if (any && row.dataset.wrapped !== '1') parts.push('\n');
+          parts.push(piece);
+          any = true;
+        });
+        if (!any) return;
+        e.preventDefault();
+        e.clipboardData?.setData('text/plain', parts.join(''));
+        onToastRef.current('Copied');
+        window.setTimeout(hideLayer, 0);
+      };
+
+      const finishPaste = (text: string) => {
         if (text) pasteTextRef.current(text);
         catcher.blur();
-        hide();
+        hideCatcher();
       };
       const onPaste = (e: ClipboardEvent) => {
         e.preventDefault();
-        finish(e.clipboardData?.getData('text/plain') || '');
+        finishPaste(e.clipboardData?.getData('text/plain') || '');
       };
       // Keyboard clipboard chips (Gboard) insert text instead of firing paste
-      const onInput = () => finish(catcher.value);
+      const onInput = () => finishPaste(catcher.value);
 
-      container.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
-      container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
-      container.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true });
+      const opts = { capture: true, passive: true } as const;
+      container.addEventListener('touchstart', onTouchStart, opts);
+      container.addEventListener('touchend', onTouchEnd, opts);
+      container.addEventListener('touchcancel', onTouchEnd, opts);
+      layer.addEventListener('touchstart', onTouchStart, opts);
+      layer.addEventListener('touchend', onTouchEnd, opts);
+      layer.addEventListener('touchcancel', onTouchEnd, opts);
+      layer.addEventListener('copy', onCopy);
+      document.addEventListener('selectionchange', onSelectionChange);
       catcher.addEventListener('paste', onPaste);
       catcher.addEventListener('input', onInput);
-      catcher.addEventListener('blur', hide);
+      catcher.addEventListener('blur', hideCatcher);
+      catcher.addEventListener('touchstart', onTouchStart, opts);
+      catcher.addEventListener('touchend', onTouchEnd, opts);
       return () => {
         container.removeEventListener('touchstart', onTouchStart, true);
         container.removeEventListener('touchend', onTouchEnd, true);
         container.removeEventListener('touchcancel', onTouchEnd, true);
+        layer.removeEventListener('touchstart', onTouchStart, true);
+        layer.removeEventListener('touchend', onTouchEnd, true);
+        layer.removeEventListener('touchcancel', onTouchEnd, true);
+        layer.removeEventListener('copy', onCopy);
+        document.removeEventListener('selectionchange', onSelectionChange);
         catcher.removeEventListener('paste', onPaste);
         catcher.removeEventListener('input', onInput);
-        catcher.removeEventListener('blur', hide);
+        catcher.removeEventListener('blur', hideCatcher);
+        catcher.removeEventListener('touchstart', onTouchStart, true);
+        catcher.removeEventListener('touchend', onTouchEnd, true);
       };
     }, []);
-
-    const pasteRef = useRef(triggerPaste);
-    pasteRef.current = triggerPaste;
 
     useImperativeHandle(
       ref,
@@ -873,6 +988,14 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
             }
           }}
           className="flex-1 min-h-0 w-full bg-black overflow-hidden"
+        />
+
+        {/* Transparent selectable copy of the screen for native long-press Copy (see effect above) */}
+        <div
+          ref={selectLayerRef}
+          className="xb-select-layer"
+          aria-hidden="true"
+          style={{ display: 'none', position: 'absolute', zIndex: 24 }}
         />
 
         {/* Invisible paste target placed under the finger on empty spots (see effect above) */}

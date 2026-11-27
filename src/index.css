@@ -142,25 +142,25 @@
 }
 
 /*
- * Phone-native text selection on the terminal.
- * xterm's DOM renderer draws real text rows; on touch screens we let the
- * phone select them directly (long-press → handles, magnifier, Copy menu).
- * Desktop keeps xterm's own mouse selection, so this is touch-only.
+ * Phone-native copy on the terminal (see TerminalPane): a transparent text copy
+ * of the screen, aligned cell by cell, sits under your finger when you touch text,
+ * so the phone's own long-press selection, handles and Copy menu work on it.
  */
-@media (pointer: coarse) {
-  .xterm .xterm-rows {
-    -webkit-user-select: text;
-    user-select: text;
-    -webkit-touch-callout: default;
-  }
-  .xterm .xterm-rows ::selection {
-    background-color: var(--accent-border);
-    color: inherit;
-  }
-  /* Layers above the rows must not swallow the long-press */
-  .xterm .xterm-selection,
-  .xterm .xterm-decoration-container,
-  .xterm .xterm-decoration-overview-ruler {
-    pointer-events: none;
-  }
+.xb-select-layer {
+  color: transparent;
+  background: transparent;
+  white-space: pre;
+  overflow: hidden;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  font-variant-ligatures: none;
+  font-kerning: none;
+}
+.xb-select-layer > div {
+  overflow: hidden;
+}
+.xb-select-layer ::selection {
+  background-color: var(--accent-border);
+  color: transparent;
 }
