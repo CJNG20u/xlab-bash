@@ -214,7 +214,7 @@ export function createSftpRouter(): Router {
   );
 
   // Download a file (streamed)
-  router.get('/download', async (req, res) => {
+  router.get('/download', async (req: Request, res: Response) => {
     let handle: SftpHandle | null = null;
     try {
       const file = remotePath(req.query.path);
@@ -254,7 +254,7 @@ export function createSftpRouter(): Router {
   });
 
   // Upload a file: raw request body is streamed into <dir>/<name>
-  router.put('/upload', async (req, res) => {
+  router.put('/upload', async (req: Request, res: Response) => {
     let handle: SftpHandle | null = null;
     try {
       const dir = remotePath(req.query.dir);

@@ -532,43 +532,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       }
     }, [isActive, fitAndResize]);
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        sendData: (data: string) => sendRaw(data),
-        focusTerminal: (allowNativeKeyboard = false) => {
-          syncTextareaInputMode(allowNativeKeyboard ? 'native' : keyboardMode);
-          termRef.current?.focus();
-        },
-        fit: fitAndResize,
-        toggleSearch: () => setSearchOpen((prev) => !prev),
-        reconnect: () => {
-          reconnectAttemptRef.current = 0;
-          connectSocket();
-        },
-        openSelect: () => openSelectAt(),
-        paste: () => triggerPaste(),
-        respondHostKey: (accept: boolean) => {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'hostkey:decision', accept }));
-          }
-          onHostKeyPrompt(session.id, null);
-        },
-      }),
-      [
-        connectSocket,
-        fitAndResize,
-        keyboardMode,
-        onHostKeyPrompt,
-        openSelectAt,
-        sendRaw,
-        session.id,
-        syncTextareaInputMode,
-        triggerPaste,
-      ]
-    );
-
     // Paste goes through xterm's paste() so bracketed-paste mode and line
     // endings are handled like a desktop terminal. Multi-line text could run
     // several commands at once, so it's shown for review first.
@@ -632,6 +595,43 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       setSelectAnchor(anchor);
       setSelectOpen(true);
     }, []);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        sendData: (data: string) => sendRaw(data),
+        focusTerminal: (allowNativeKeyboard = false) => {
+          syncTextareaInputMode(allowNativeKeyboard ? 'native' : keyboardMode);
+          termRef.current?.focus();
+        },
+        fit: fitAndResize,
+        toggleSearch: () => setSearchOpen((prev) => !prev),
+        reconnect: () => {
+          reconnectAttemptRef.current = 0;
+          connectSocket();
+        },
+        openSelect: () => openSelectAt(),
+        paste: () => triggerPaste(),
+        respondHostKey: (accept: boolean) => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'hostkey:decision', accept }));
+          }
+          onHostKeyPrompt(session.id, null);
+        },
+      }),
+      [
+        connectSocket,
+        fitAndResize,
+        keyboardMode,
+        onHostKeyPrompt,
+        openSelectAt,
+        sendRaw,
+        session.id,
+        syncTextareaInputMode,
+        triggerPaste,
+      ]
+    );
 
     const clearLongPress = () => {
       if (longPressTimerRef.current !== null) {
