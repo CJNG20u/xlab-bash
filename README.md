@@ -35,7 +35,7 @@ SSH on a phone usually means a choice between two bad options. Terminal apps lik
 
 - **Real Interactive SSH PTY**: `xterm.js` (`xterm-256color`, 10,000-line scrollback, fit, clickable links, search) piped into `ssh2` over WebSocket, with Fish-inspired color themes (`Fish Vivid`, `Fish Aurora`, `Fish Sunset`, `OLED Classic`). Works with `vim`, `htop`, `nano` and `tmux`.
 - **Built-In Developer Keyboard**: Large on-screen PC-style keyboard with a `123` toggle, `Ctrl`, `Shift`, `Alt`, `Fn/Sym`, arrows and navigation keys. Uses `inputmode="none"` to keep the Android keyboard away, with sticky/double-tap-lock modifiers, hold-to-repeat, spacebar swipe cursor scrubbing, key-preview popups, haptics, and a JSON layout editor.
-- **Phone-Native Copy & Paste**: The terminal text is real text, so long-press selects it with your phone's own handles, magnifier and Copy menu, with no extra screens. Long-press an empty spot to Paste.
+- **Phone-Native Copy & Paste**: The terminal text is real text, so long-press selects it with your phone's own handles, magnifier and Copy menu, with no extra screens. Long-press an empty spot to get your phone's Paste.
 - **Quick Bar & Snippets**: One-tap shell combos (`Esc`, `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, `Ctrl+L`, `Ctrl+R`, `Ctrl+A`, `Ctrl+E`, `Tab`, `|`, `~`, `/`, `$`) plus a swipeable row of your own snippets (`qm list`, `pct list`, `systemctl status`, `docker ps`, `journalctl -f`, `htop`…).
 - **Encrypted Host Vault**: Saved hosts (password or PEM/OpenSSH private key with passphrase) stored in SQLite with AES-256-GCM encryption. Credentials never touch `localStorage`.
 - **Host Key Verification**: Shows the SHA-256 host key fingerprint on first connect and warns loudly if a host key changes.
@@ -170,8 +170,8 @@ Keep `TRUST_PROXY=1` in `.env` (see [Login & Security](#login--security)).
 - **Sticky Modifiers**: Tap `Ctrl`, `Alt`, or `Shift` once for one-shot; double-tap to lock; tap again to release.
 - **Cursor Scrubbing**: Swipe left or right across the `Space` bar to move the terminal cursor precisely.
 - **Zoom Font Size**: Pinch with two fingers on the terminal or use `-` / `+` in the toolbar or settings.
-- **Copy**: Works like any text on your phone. Long-press a word in the terminal, drag the handles, tap **Copy** in the phone's menu.
-- **Paste**: Long-press an empty spot and tap the **Paste** bubble, tap **Paste** in the quick bar, or use your keyboard's clipboard (Gboard) in phone-keyboard mode. Multi-line pastes are bracketed, so bash/zsh wait for you to press Enter. Reading the clipboard needs HTTPS; on plain HTTP a paste box opens instead.
+- **Copy**: Long-press a word, drag the handles, tap **Copy** in your phone's menu, just like any other text.
+- **Paste**: Long-press an empty spot in the terminal and tap your phone's **Paste**. Works over plain HTTP too. The **Paste** key in the quick bar and Gboard's clipboard chip also work (the quick-bar key needs HTTPS). Multi-line pastes are bracketed, so bash/zsh wait for you to press Enter.
 - **Desktop**: Mouse selection copies automatically; `Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste.
 
 ---

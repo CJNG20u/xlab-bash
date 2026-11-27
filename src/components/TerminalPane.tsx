@@ -5,7 +5,6 @@ import { Terminal } from '@xterm/xterm';
 import {
   ChevronDown,
   ChevronUp,
-  ClipboardPaste,
   Loader2,
   RefreshCw,
   Search,
@@ -89,18 +88,15 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
-    const [pasteSheetOpen, setPasteSheetOpen] = useState(false);
-    const [manualPasteText, setManualPasteText] = useState('');
     // true when the paste sheet is confirming a multi-line clipboard paste
-    // Android-style "Paste" bubble shown after a long-press on an empty spot
-    const [pasteBubble, setPasteBubble] = useState<{ x: number; y: number } | null>(null);
     const paneRef = useRef<HTMLDivElement | null>(null);
+    // Invisible text field slipped under the finger when you touch an empty spot,
+    // so a long-press there gets Android's own "Paste" menu (works on plain HTTP too).
+    const pasteCatcherRef = useRef<HTMLTextAreaElement | null>(null);
 
     // Touch pinch-to-zoom & long-press-to-paste state
     const pinchStartDistRef = useRef<number | null>(null);
     const pinchStartSizeRef = useRef<number>(fontSize);
-    const longPressTimerRef = useRef<number | null>(null);
-    const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
 
     const syncTextareaInputMode = useCallback(
       (mode: KeyboardMode) => {
@@ -519,7 +515,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         if (now !== selecting) {
           selecting = now;
           term.options.cursorBlink = !now;
-          if (now) setPasteBubble(null);
         }
       };
       document.addEventListener('selectionchange', onSelectionChange);
@@ -528,13 +523,6 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         document.removeEventListener('selectionchange', onSelectionChange);
       };
     }, []);
-
-    // Hide the paste bubble after a few seconds
-    useEffect(() => {
-      if (!pasteBubble) return;
-      const t = window.setTimeout(() => setPasteBubble(null), 4000);
-      return () => window.clearTimeout(t);
-    }, [pasteBubble]);
 
     // Phone woke up / network came back: re-attach right away instead of waiting
     // for the backoff timer (the shell kept running on the server).
@@ -613,11 +601,94 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           }
         }
       } catch {
-        // Clipboard read blocked (plain HTTP or permission denied): use the paste sheet
+        // Clipboard read blocked (plain HTTP or permission denied)
       }
-      setManualPasteText('');
-      setPasteSheetOpen(true);
-    }, [pasteText]);
+      onToast('Long-press an empty spot in the terminal and tap Paste');
+    }, [onToast, pasteText]);
+
+    const pasteTextRef = useRef(pasteText);
+    pasteTextRef.current = pasteText;
+
+    // Long-press = phone-native copy / paste:
+    //  - on text: the phone selects it (handles + Copy menu)
+    //  - on an empty spot: an invisible text field sits under the finger, so the
+    //    phone shows its own "Paste" menu, and the paste goes into the shell
+    useEffect(() => {
+      const container = containerRef.current;
+      const pane = paneRef.current;
+      const catcher = pasteCatcherRef.current;
+      if (!container || !pane || !catcher) return;
+
+      const hide = () => {
+        catcher.style.display = 'none';
+        catcher.value = '';
+      };
+
+      const isBlankAt = (clientX: number, clientY: number): boolean => {
+        const term = termRef.current;
+        const screen = container.querySelector('.xterm-screen') as HTMLElement | null;
+        if (!term || !screen) return false;
+        const rect = screen.getBoundingClientRect();
+        const row = Math.floor((clientY - rect.top) / (rect.height / term.rows));
+        const col = Math.floor((clientX - rect.left) / (rect.width / term.cols));
+        if (row < 0 || col < 0) return false;
+        if (row >= term.rows || col >= term.cols) return true; // padding around the grid
+        const line = term.buffer.active.getLine(term.buffer.active.viewportY + row);
+        const ch = line?.getCell(col)?.getChars() ?? '';
+        return ch.trim() === '';
+      };
+
+      const onTouchStart = (e: TouchEvent) => {
+        if (e.touches.length !== 1) {
+          if (document.activeElement !== catcher) hide();
+          return;
+        }
+        const t = e.touches[0];
+        if (!isBlankAt(t.clientX, t.clientY)) {
+          if (document.activeElement !== catcher) hide();
+          return;
+        }
+        // Must happen synchronously, before the browser decides what the long-press hits
+        const p = pane.getBoundingClientRect();
+        catcher.style.left = `${t.clientX - p.left - 28}px`;
+        catcher.style.top = `${t.clientY - p.top - 28}px`;
+        catcher.style.display = 'block';
+      };
+
+      // A plain tap or a scroll must not leave the field in the way
+      const onTouchEnd = () => {
+        window.setTimeout(() => {
+          if (document.activeElement !== catcher) hide();
+        }, 0);
+      };
+
+      const finish = (text: string) => {
+        if (text) pasteTextRef.current(text);
+        catcher.blur();
+        hide();
+      };
+      const onPaste = (e: ClipboardEvent) => {
+        e.preventDefault();
+        finish(e.clipboardData?.getData('text/plain') || '');
+      };
+      // Keyboard clipboard chips (Gboard) insert text instead of firing paste
+      const onInput = () => finish(catcher.value);
+
+      container.addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+      container.addEventListener('touchend', onTouchEnd, { capture: true, passive: true });
+      container.addEventListener('touchcancel', onTouchEnd, { capture: true, passive: true });
+      catcher.addEventListener('paste', onPaste);
+      catcher.addEventListener('input', onInput);
+      catcher.addEventListener('blur', hide);
+      return () => {
+        container.removeEventListener('touchstart', onTouchStart, true);
+        container.removeEventListener('touchend', onTouchEnd, true);
+        container.removeEventListener('touchcancel', onTouchEnd, true);
+        catcher.removeEventListener('paste', onPaste);
+        catcher.removeEventListener('input', onInput);
+        catcher.removeEventListener('blur', hide);
+      };
+    }, []);
 
     const pasteRef = useRef(triggerPaste);
     pasteRef.current = triggerPaste;
@@ -657,26 +728,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       ]
     );
 
-    /** True when the phone's own selection is inside this terminal. */
-    const hasNativeSelection = () => {
-      const sel = window.getSelection();
-      const container = containerRef.current;
-      return Boolean(
-        sel && container && !sel.isCollapsed && sel.toString().length > 0 && container.contains(sel.anchorNode)
-      );
-    };
-
-    const clearLongPress = () => {
-      if (longPressTimerRef.current !== null) {
-        window.clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-      }
-      longPressStartRef.current = null;
-    };
-
+    // Two-finger pinch zooms the font
     const handleTouchStart = (e: React.TouchEvent) => {
       if (e.touches.length === 2) {
-        clearLongPress();
         const dx = e.touches[0].clientX - e.touches[1].clientX;
         const dy = e.touches[0].clientY - e.touches[1].clientY;
         pinchStartDistRef.current = Math.hypot(dx, dy);
@@ -684,28 +738,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         return;
       }
 
-      if (e.touches.length === 1) {
-        pinchStartDistRef.current = null;
-        setPasteBubble(null);
-        const t = e.touches[0];
-        longPressStartRef.current = { x: t.clientX, y: t.clientY };
-        // Long-press on text: the phone selects it natively (handles + Copy menu).
-        // Long-press on an empty spot: nothing to select, so offer Paste like a text field.
-        longPressTimerRef.current = window.setTimeout(() => {
-          const start = longPressStartRef.current;
-          if (!start || hasNativeSelection()) return;
-          const pane = paneRef.current?.getBoundingClientRect();
-          if (!pane) return;
-          if (navigator.vibrate) {
-            try {
-              navigator.vibrate(12);
-            } catch {
-              // ignore
-            }
-          }
-          setPasteBubble({ x: start.x - pane.left, y: start.y - pane.top });
-        }, 650);
-      }
+      pinchStartDistRef.current = null;
     };
 
     const handleTouchMove = (e: React.TouchEvent) => {
@@ -718,24 +751,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         if (nextSize !== fontSizeRef.current) {
           onFontSizeChange(nextSize);
         }
-        return;
-      }
-
-      if (e.touches.length === 1 && longPressStartRef.current) {
-        const t = e.touches[0];
-        const moved = Math.hypot(
-          t.clientX - longPressStartRef.current.x,
-          t.clientY - longPressStartRef.current.y
-        );
-        if (moved > 10) {
-          clearLongPress();
-        }
       }
     };
 
     const handleTouchEnd = () => {
       pinchStartDistRef.current = null;
-      clearLongPress();
     };
 
     const handleSearchNext = () => {
@@ -855,78 +875,33 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           className="flex-1 min-h-0 w-full bg-black overflow-hidden"
         />
 
-        {/* Android-style Paste bubble after long-pressing an empty spot */}
-        {pasteBubble && (
-          <button
-            type="button"
-            onClick={() => {
-              setPasteBubble(null);
-              triggerPaste();
-            }}
-            style={{
-              left: Math.max(8, pasteBubble.x - 40),
-              top: Math.max(8, pasteBubble.y - 56),
-            }}
-            className="absolute z-30 h-10 px-4 rounded-full bg-zinc-800 text-zinc-50 text-sm font-medium shadow-lg shadow-black/60 border border-zinc-700 active:scale-95 transition"
-          >
-            Paste
-          </button>
-        )}
-
-        {/* Fallback Paste Modal when browser blocks navigator.clipboard.readText() */}
-        {pasteSheetOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-                  <ClipboardPaste className="w-4 h-4 text-accent" />
-                  <span>Paste into Terminal</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPasteSheetOpen(false);
-                  }}
-                  className="p-1 text-zinc-400 hover:text-zinc-100"
-                  aria-label="Close"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <textarea
-                autoFocus
-                rows={4}
-                value={manualPasteText}
-                onChange={(e) => setManualPasteText(e.target.value)}
-                placeholder="Long-press here and tap Paste..."
-                className="mt-3 w-full rounded-xl border border-zinc-800 bg-black p-3 text-xs font-mono-term text-zinc-100 placeholder:text-zinc-600 focus-accent"
-              />
-              <div className="mt-3 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPasteSheetOpen(false);
-                  }}
-                  className="h-9 px-3.5 rounded-lg border border-zinc-800 text-xs text-zinc-300 hover:bg-zinc-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (manualPasteText) {
-                      pasteText(manualPasteText);
-                    }
-                    setPasteSheetOpen(false);
-                  }}
-                  className="h-9 px-4 rounded-lg btn-accent text-xs font-semibold transition"
-                >
-                  Send to Shell
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Invisible paste target placed under the finger on empty spots (see effect above) */}
+        <textarea
+          ref={pasteCatcherRef}
+          aria-hidden="true"
+          tabIndex={-1}
+          inputMode="none"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          style={{
+            display: 'none',
+            position: 'absolute',
+            zIndex: 25,
+            width: 56,
+            height: 56,
+            opacity: 0.01,
+            color: 'transparent',
+            caretColor: 'transparent',
+            background: 'transparent',
+            border: 0,
+            outline: 'none',
+            resize: 'none',
+            fontSize: 16,
+            padding: 0,
+          }}
+        />
       </div>
     );
   }
