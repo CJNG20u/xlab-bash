@@ -49,14 +49,16 @@ SSH on a phone usually means a choice between two bad options. Terminal apps lik
 
 ## Install
 
-Every xlab app installs and updates the same way: one folder, one `docker-compose.yml`, one `.env`, your data in `./data`.
+Every xlab app installs and updates the same way: clone the repo into `/opt`, copy the `.env`, and start the prebuilt GHCR image. Your data lives in `./data`.
 
 ```bash
-mkdir -p /opt/xlab-bash && cd /opt/xlab-bash
-curl -fsSLO https://raw.githubusercontent.com/CJNG20u/xlab-bash/main/docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/CJNG20u/xlab-bash/main/.env.example -o .env
+git clone https://github.com/CJNG20u/xlab-bash.git /opt/xlab-bash
+cd /opt/xlab-bash
+cp .env.example .env
 docker compose up -d
 ```
+
+`docker compose up -d` pulls `ghcr.io/cjng20u/xlab-bash:latest`; nothing is built on your server.
 
 Open `http://<host-ip>:8022`. On first visit you create the admin account (see [Login & Security](#login--security)).
 
@@ -66,8 +68,11 @@ No keys to generate: on first start xlab-bash creates its encryption key and ses
 
 ```bash
 cd /opt/xlab-bash
+git pull
 docker compose pull && docker compose up -d
 ```
+
+`git pull` brings in any changes to `docker-compose.yml` and `.env.example` (your own `.env` and `./data` are never touched); `docker compose pull` gets the new image.
 
 Images are built automatically for `linux/amd64` and `linux/arm64`. `:latest` follows `main`; every release also gets version tags (for example `:1.0.0`, `:1`), so you can pin one with `image: ghcr.io/cjng20u/xlab-bash:1.0.0`.
 
@@ -87,10 +92,10 @@ rm -rf /opt/xlab-bash
 
 ## Build from source
 
+From the same clone, build the image locally instead of pulling it:
+
 ```bash
-git clone https://github.com/CJNG20u/xlab-bash.git
-cd xlab-bash
-cp .env.example .env
+cd /opt/xlab-bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
