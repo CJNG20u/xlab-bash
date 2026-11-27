@@ -143,4 +143,32 @@ export interface TerminalSession {
   errorMessage?: string;
   reconnectAttempt: number;
   hostKeyPrompt: HostKeyPrompt | null;
+  /** Server-side shell key; lets the tab re-attach after drops and page reloads. */
+  sessionKey?: string;
+}
+
+/** A shell kept alive on the server (attached or waiting for the browser to return). */
+export interface ShellSessionInfo {
+  key: string;
+  label: string;
+  target: string;
+  hostId?: string;
+  attached: boolean;
+  createdAt: number;
+  lastActivity: number;
+  detachedAt: number | null;
+}
+
+export interface RemoteEntry {
+  name: string;
+  type: 'dir' | 'file' | 'link' | 'other';
+  size: number;
+  mtime: number;
+  mode: number;
+}
+
+export interface RemoteListing {
+  path: string;
+  parent: string | null;
+  entries: RemoteEntry[];
 }

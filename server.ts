@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import {
   authRateLimiter,
+  bumpSessionEpoch,
+  changeAdminPassword,
   clearSessionCookie,
   getAuthStatusForRequest,
   issueWsTicket,
@@ -32,7 +34,14 @@ import {
   updateLayout,
   updateSnippet,
 } from './server/db.ts';
-import { attachSshWebSocketServer, handleSshUpgrade } from './server/sshManager.ts';
+import { createSftpRouter } from './server/sftp.ts';
+import {
+  attachSshWebSocketServer,
+  handleSshUpgrade,
+  killAllShellSessions,
+  killShellSession,
+  listShellSessions,
+} from './server/sshManager.ts';
 import type { HostPayload, KeyboardLayoutData } from './src/types/index.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -175,6 +184,62 @@ async function startServer() {
     clearSessionCookie(res);
     res.json({ ok: true });
   });
+
+  // Change the first-run admin password. Signs out every other device;
+  // this device gets a fresh session and its terminals reconnect on their own.
+  app.post('/api/auth/change-password', authRateLimiter, requireAuth, (req: Request, res: Response) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+      res.status(400).json({ error: 'Current and new password are required.' });
+      return;
+    }
+    const result = changeAdminPassword(currentPassword, newPassword);
+    if (result === 'env-managed') {
+      res.status(409).json({ error: 'The login is set by APP_PASSWORD in .env. Change it there.' });
+      return;
+    }
+    if (result === 'wrong-password') {
+      res.status(401).json({ error: 'Current password is incorrect.' });
+      return;
+    }
+    if (result === 'too-short') {
+      res.status(400).json({ error: 'New password must be at least 10 characters.' });
+      return;
+    }
+    const authUser = (req as Request & { authUser?: string }).authUser || 'admin';
+    const token = signSessionToken(authUser);
+    setSessionCookie(res, token);
+    res.json({ ok: true, token });
+  });
+
+  // Revoke every session on every device and end all running shells.
+  app.post('/api/auth/logout-all', requireAuth, (_req: Request, res: Response) => {
+    const ended = killAllShellSessions();
+    bumpSessionEpoch();
+    clearSessionCookie(res);
+    res.json({ ok: true, endedShells: ended });
+  });
+
+  // --- Running shells (kept alive while the browser is away) ---
+
+  app.get('/api/sessions', requireAuth, (_req: Request, res: Response) => {
+    res.json({
+      sessions: listShellSessions(),
+      lingerMinutes: Math.max(0, Number(process.env.SESSION_LINGER_MINUTES ?? 15) || 0),
+    });
+  });
+
+  app.delete('/api/sessions/:key', requireAuth, (req: Request, res: Response) => {
+    if (!killShellSession(req.params.key)) {
+      res.status(404).json({ error: 'Session not found.' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // --- SFTP file browser for saved hosts ---
+
+  app.use('/api/hosts/:id/files', requireAuth, createSftpRouter());
 
   // Short-lived single-use ticket for opening a WebSocket SSH stream
   app.post('/api/ws-ticket', requireAuth, (req: Request, res: Response) => {

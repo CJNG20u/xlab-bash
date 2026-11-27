@@ -26,6 +26,7 @@ SSH on a phone usually means a choice between two bad options. Terminal apps lik
 - **Real PTY, not pixels:** The server opens a genuine `ssh2` shell and streams plain text over one WebSocket. `xterm.js` renders it locally, so it's sharp at any zoom, fast on a weak signal, and copy/paste works like text.
 - **A keyboard made for shells:** A built-in developer keyboard replaces the Android keyboard with sticky `Ctrl`/`Alt`/`Shift`, arrows, `Home`/`End`/`PgUp`/`PgDn`, a quick bar for `Ctrl+C` / `Ctrl+R` / `Tab`, and one-tap snippets like `qm list` and `pct list`.
 - **Your hosts, your server:** Saved hosts and private keys stay encrypted (AES-256-GCM) in SQLite on your own box. Nothing is stored in the browser and nothing goes through a third-party relay.
+- **Built for flaky mobile connections:** Shells keep running on the server when your phone sleeps or switches networks, and pick up where you left off, no `tmux` required.
 - **One small container:** One Node.js process, one `./data` folder, no database server and no agents on the target machines; anything that runs `sshd` works.
 
 ---
@@ -37,8 +38,10 @@ SSH on a phone usually means a choice between two bad options. Terminal apps lik
 - **Quick Bar & Snippets**: One-tap shell combos (`Esc`, `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, `Ctrl+L`, `Ctrl+R`, `Ctrl+A`, `Ctrl+E`, `Tab`, `|`, `~`, `/`, `$`) plus a swipeable row of your own snippets (`qm list`, `pct list`, `systemctl status`, `docker ps`, `journalctl -f`, `htop`…).
 - **Encrypted Host Vault**: Saved hosts (password or PEM/OpenSSH private key with passphrase) stored in SQLite with AES-256-GCM encryption. Credentials never touch `localStorage`.
 - **Host Key Verification**: Shows the SHA-256 host key fingerprint on first connect and warns loudly if a host key changes.
-- **Multiple Tabs & Auto-Reconnect**: Several sessions side by side; dropped connections reconnect automatically (pair with `tmux` to pick up exactly where you left off).
-- **Built-in Login**: A sign-in screen protects the app and every SSH stream. Passwords are hashed with scrypt, logins are rate limited, and terminal WebSockets need a short-lived single-use ticket.
+- **Shells That Survive Your Phone**: Locking the screen, switching from Wi-Fi to 5G or reloading the page doesn't kill the shell. It keeps running on the server (15 minutes by default), and when you come back the tab re-attaches and replays everything you missed. Tabs are remembered across reloads, and a shell started on your phone can be opened on your PC from **Settings → Security → Running shells**.
+- **SFTP File Browser**: Tap **Files** on any saved host to browse folders, download files, upload from your phone (with progress), create folders, rename and delete. Works only on hosts whose key you already verified in a terminal.
+- **Multiple Tabs & Auto-Reconnect**: Several sessions side by side; dropped connections reconnect instantly when the phone wakes up or the network comes back.
+- **Built-in Login**: A sign-in screen protects the app and every SSH stream. Passwords are hashed with scrypt, logins are rate limited, and terminal WebSockets need a short-lived single-use ticket. Change your password or **sign out everywhere** from **Settings → Security**.
 - **Installable PWA**: Full-screen standalone mode on Android and iOS with zero browser chrome.
 
 ---
@@ -96,6 +99,12 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 xlab-bash is a remote shell, so treat it like one. The first time you open it, it asks you to create an admin account (password of at least 10 characters). After that, the app and every SSH stream need a sign-in. You stay signed in for 7 days on each device.
 
+Under **Settings → Security** you can:
+
+- **Change password**: signs out every other device. Your own shells keep running and reconnect on their own.
+- **Sign out everywhere**: revokes every login on every device and ends all running shells. Use it if a phone gets lost.
+- **Running shells**: see every shell that's open or waiting for you, open one here, or end it.
+
 **Open it right after you start the container.** Until the account exists, whoever reaches the page first can create it. To skip that, set the account in `.env` instead:
 
 ```env
@@ -108,6 +117,7 @@ APP_PASSWORD=choose-a-long-password
 | `APP_USERNAME` / `APP_PASSWORD` | Fixed admin login from the environment. When set, the first-run screen is skipped. |
 | `ENCRYPTION_KEY` | Key for the host vault. Optional: generated and saved in `data/secrets.json` if empty. If you set it, never change it, or saved passwords/keys can't be decrypted. |
 | `JWT_SECRET` | Signs login sessions. Optional: generated and saved in `data/secrets.json` if empty. Changing it signs everyone out. |
+| `SESSION_LINGER_MINUTES` | How long a shell keeps running after the browser disconnects (default `15`). `0` ends shells as soon as the connection drops. |
 | `TRUST_PROXY` | Number of reverse proxies in front (Caddy, Cloudflare Tunnel). Lets rate limiting see real IPs and lets xlab-bash detect HTTPS. Set `0` for direct LAN access only. |
 | `ALLOWED_ORIGINS` | Only needed if your proxy rewrites the `Host` header and the terminal fails to connect (403 on `/ws/ssh`). Comma-separated hostnames, e.g. `ssh.example.com`. |
 
@@ -117,6 +127,8 @@ What's protected:
 - The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` whenever you reach the app over HTTPS.
 - Terminal WebSockets check the page's origin, so another website can't open a shell using your login.
 - Login attempts are rate limited per IP (12 per 15 minutes).
+- File transfers only run against hosts whose SSH key you already accepted, and refuse if that key changes.
+- Open tabs are remembered in the browser by session ID only; no passwords or keys are ever stored there.
 
 **Forgot your password?** Set `APP_USERNAME` and `APP_PASSWORD` in `.env` and run `docker compose up -d`; the environment login takes over. Your saved hosts are not touched.
 

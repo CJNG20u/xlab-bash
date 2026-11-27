@@ -8,7 +8,7 @@ import {
   timingSafeEqualString,
   verifyPasswordHash,
 } from './crypto.ts';
-import { claimAdminOnce, getClaimedAdmin } from './db.ts';
+import { claimAdminOnce, getClaimedAdmin, getConfig, setConfig } from './db.ts';
 import { getJwtSecret } from './secrets.ts';
 
 export const SESSION_COOKIE_NAME = 'termdock_session';
@@ -20,8 +20,38 @@ const JWT_SECRET = getJwtSecret();
 
 interface SessionPayload {
   sub: string;
+  ep?: number; // session epoch: bumping it revokes every token issued before
   iat?: number;
   exp?: number;
+}
+
+// --- Session epoch (sign out everywhere / password change) ---
+
+type EpochListener = () => void;
+const epochListeners = new Set<EpochListener>();
+
+export function getSessionEpoch(): number {
+  const n = Number(getConfig('session_epoch') || '0');
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+/** Revokes every existing session token and notifies listeners (open sockets close). */
+export function bumpSessionEpoch(): number {
+  const next = getSessionEpoch() + 1;
+  setConfig('session_epoch', String(next));
+  wsTickets.clear();
+  for (const fn of epochListeners) {
+    try {
+      fn();
+    } catch {
+      // ignore listener failures
+    }
+  }
+  return next;
+}
+
+export function onSessionEpochChange(fn: EpochListener): void {
+  epochListeners.add(fn);
 }
 
 // Short-lived single-use tickets for WebSocket handshake authentication
@@ -83,15 +113,37 @@ export function performFirstRunSetup(username: string, password: string): boolea
   return claimAdminOnce(cleanUser, hashed);
 }
 
+export type ChangePasswordResult = 'ok' | 'env-managed' | 'wrong-password' | 'too-short';
+
+/** Changes the first-run admin password and revokes all other sessions. */
+export function changeAdminPassword(currentPassword: string, newPassword: string): ChangePasswordResult {
+  if (isEnvAuthActive()) return 'env-managed';
+  const claimed = getClaimedAdmin();
+  if (!claimed || !verifyPasswordHash(currentPassword, claimed.passwordHash)) {
+    return 'wrong-password';
+  }
+  if (newPassword.length < 10) return 'too-short';
+  setConfig(
+    'claimed_admin',
+    JSON.stringify({ username: claimed.username, passwordHash: hashPassword(newPassword) })
+  );
+  bumpSessionEpoch();
+  return 'ok';
+}
+
 export function signSessionToken(username: string): string {
-  return jwt.sign({ sub: username }, JWT_SECRET, { expiresIn: SESSION_TTL_SECONDS });
+  return jwt.sign({ sub: username, ep: getSessionEpoch() }, JWT_SECRET, {
+    expiresIn: SESSION_TTL_SECONDS,
+  });
 }
 
 export function verifySessionToken(token: string | undefined | null): string | null {
   if (!token) return null;
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as SessionPayload;
-    return typeof decoded.sub === 'string' ? decoded.sub : null;
+    if (typeof decoded.sub !== 'string') return null;
+    if ((decoded.ep ?? 0) !== getSessionEpoch()) return null; // revoked
+    return decoded.sub;
   } catch {
     return null;
   }

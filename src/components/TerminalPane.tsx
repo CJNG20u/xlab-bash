@@ -49,6 +49,7 @@ interface TerminalPaneProps {
     extra?: { errorMessage?: string; reconnectAttempt?: number }
   ) => void;
   onHostKeyPrompt: (sessionId: string, prompt: HostKeyPrompt | null) => void;
+  onSessionKey: (sessionId: string, sessionKey: string | undefined) => void;
   onToast: (message: string) => void;
 }
 
@@ -63,6 +64,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       onFontSizeChange,
       onStatusChange,
       onHostKeyPrompt,
+      onSessionKey,
       onToast,
     },
     ref
@@ -75,6 +77,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
     const reconnectTimerRef = useRef<number | null>(null);
     const reconnectAttemptRef = useRef(0);
     const manualCloseRef = useRef(false);
+    // Server-side shell this tab is bound to, and how many output characters we've rendered.
+    const sessionKeyRef = useRef<string | undefined>(session.sessionKey);
+    const seqRef = useRef(0);
     const fontSizeRef = useRef(fontSize);
     fontSizeRef.current = fontSize;
 
@@ -176,13 +181,16 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       let hadTerminalError = false;
       let heartbeat: number | null = null;
 
-      ws.onopen = () => {
+      let sessionEnded = false; // remote shell exited / taken over: don't reconnect
+
+      const sendConnect = (): boolean => {
         const cols = termRef.current?.cols || 80;
         const rows = termRef.current?.rows || 24;
-
         if (session.hostId) {
           ws.send(JSON.stringify({ type: 'connect', hostId: session.hostId, cols, rows }));
-        } else if (session.quickTarget) {
+          return true;
+        }
+        if (session.quickTarget) {
           ws.send(
             JSON.stringify({
               type: 'connect',
@@ -193,10 +201,33 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               password: session.quickTarget.password,
               privateKey: session.quickTarget.privateKey,
               passphrase: session.quickTarget.passphrase,
+              label: session.title,
               cols,
               rows,
             })
           );
+          return true;
+        }
+        return false;
+      };
+
+      ws.onopen = () => {
+        const cols = termRef.current?.cols || 80;
+        const rows = termRef.current?.rows || 24;
+
+        if (sessionKeyRef.current) {
+          // Re-attach to the shell that kept running on the server
+          ws.send(
+            JSON.stringify({
+              type: 'attach',
+              sessionKey: sessionKeyRef.current,
+              since: seqRef.current,
+              cols,
+              rows,
+            })
+          );
+        } else {
+          sendConnect();
         }
 
         heartbeat = window.setInterval(() => {
@@ -216,6 +247,34 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
         if (msg.type === 'data' && typeof msg.data === 'string') {
           termRef.current?.write(msg.data);
+          if (typeof msg.seq === 'number') seqRef.current = msg.seq;
+          return;
+        }
+
+        if (msg.type === 'session' && typeof msg.sessionKey === 'string') {
+          sessionKeyRef.current = msg.sessionKey;
+          onSessionKey(session.id, msg.sessionKey);
+          if (msg.resumed) {
+            hadConnected = true;
+          }
+          return;
+        }
+
+        if (msg.type === 'session-expired') {
+          sessionKeyRef.current = undefined;
+          seqRef.current = 0;
+          onSessionKey(session.id, undefined);
+          if (sendConnect()) {
+            termRef.current?.writeln(
+              `\r\n\x1b[33m[xlab-bash] The previous shell has ended. Starting a new one...\x1b[0m`
+            );
+          } else {
+            hadTerminalError = true;
+            const text = 'This session has ended on the server. Close the tab and connect again.';
+            onStatusChange(session.id, 'error', { errorMessage: text });
+            termRef.current?.writeln(`\r\n\x1b[31m[xlab-bash] ${text}\x1b[0m`);
+            ws.close();
+          }
           return;
         }
 
@@ -260,6 +319,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         if (msg.type === 'closed') {
           const reason = String(msg.message || 'Connection closed.');
           termRef.current?.writeln(`\r\n\x1b[33m[Session Closed] ${reason}\x1b[0m`);
+          if (msg.final || msg.taken) {
+            sessionEnded = true;
+            if (msg.final) {
+              sessionKeyRef.current = undefined;
+              onSessionKey(session.id, undefined);
+            }
+          }
         }
       };
 
@@ -272,8 +338,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
         if (manualCloseRef.current) return;
 
-        // Auto-reconnect on unexpected drops after a session had connected or network hiccup
-        if (hadConnected && !hadTerminalError) {
+        // Auto-reconnect on unexpected drops; the shell is still running on the server
+        // and is re-attached with everything it printed in the meantime.
+        if (!sessionEnded && !hadTerminalError && (hadConnected || sessionKeyRef.current)) {
           const attempt = reconnectAttemptRef.current + 1;
           reconnectAttemptRef.current = attempt;
           const delayMs = Math.min(12_000, 1500 * Math.pow(1.6, attempt - 1));
@@ -290,7 +357,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           onStatusChange(session.id, 'disconnected');
         }
       };
-    }, [clearReconnectTimer, fitAndResize, onHostKeyPrompt, onStatusChange, session]);
+    }, [clearReconnectTimer, fitAndResize, onHostKeyPrompt, onSessionKey, onStatusChange, session]);
 
     // Mount xterm.js instance once per session
     useEffect(() => {
@@ -371,6 +438,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         selDisp.dispose();
         if (wsRef.current) {
           try {
+            // Tab closed on purpose: end the shell instead of leaving it running
+            if (wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'close' }));
+            }
             wsRef.current.close();
           } catch {
             // ignore
@@ -384,6 +455,26 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session.id]);
+
+    // Phone woke up / network came back: re-attach right away instead of waiting
+    // for the backoff timer (the shell kept running on the server).
+    useEffect(() => {
+      const kick = () => {
+        if (document.visibilityState !== 'visible' || manualCloseRef.current) return;
+        const ws = wsRef.current;
+        const dead = !ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING;
+        if (dead && (reconnectTimerRef.current !== null || sessionKeyRef.current)) {
+          reconnectAttemptRef.current = 0;
+          connectSocket();
+        }
+      };
+      document.addEventListener('visibilitychange', kick);
+      window.addEventListener('online', kick);
+      return () => {
+        document.removeEventListener('visibilitychange', kick);
+        window.removeEventListener('online', kick);
+      };
+    }, [connectSocket]);
 
     // Sync fontSize updates
     useEffect(() => {
