@@ -1,0 +1,142 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --accent: #1db954;
+    --accent-hover: #1ed760;
+    --accent-fg: #000000;
+    --accent-text: #1ed760;
+    --accent-soft: rgba(29, 185, 84, 0.18);
+    --accent-border: rgba(29, 185, 84, 0.58);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    height: 100dvh;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: #000000;
+    color: #f4f4f5;
+    font-family: var(--font-sans);
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input[type="range"],
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+}
+
+.font-mono-term {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dynamic App Button Theme Utilities */
+.btn-accent {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-accent:hover {
+  background-color: var(--accent-hover);
+}
+
+.btn-accent-soft {
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+}
+
+.btn-accent-outline {
+  background-color: #18181b;
+  color: var(--accent-text);
+  border-color: #27272a;
+}
+.btn-accent-outline:hover {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.text-accent {
+  color: var(--accent-text);
+}
+
+.border-accent {
+  border-color: var(--accent-border);
+}
+
+.bg-accent-solid {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+.bg-accent-soft {
+  background-color: var(--accent-soft);
+}
+
+.active-accent:active {
+  background-color: var(--accent) !important;
+  color: var(--accent-fg) !important;
+  border-color: var(--accent) !important;
+}
+
+.focus-accent:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Pure OLED black xterm.js overrides */
+.xterm {
+  padding: 6px 6px 4px 8px;
+  height: 100%;
+  background-color: #000000;
+}
+
+.xterm-viewport {
+  background-color: #000000 !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 5px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: #000000;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Prevent double-tap zoom and text selection on virtual keyboard keys */
+.dev-key {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

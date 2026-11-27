@@ -1,0 +1,684 @@
+import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { Terminal } from '@xterm/xterm';
+import {
+  ChevronDown,
+  ChevronUp,
+  ClipboardPaste,
+  RefreshCw,
+  Search,
+  X,
+} from 'lucide-react';
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
+import { api } from '../lib/api.ts';
+import { getTerminalTheme } from '../lib/terminalThemes.ts';
+import type {
+  ConnectionState,
+  HostKeyPrompt,
+  KeyboardMode,
+  TerminalSession,
+} from '../types/index.ts';
+
+export interface TerminalPaneHandle {
+  sendData: (data: string) => void;
+  focusTerminal: (allowNativeKeyboard?: boolean) => void;
+  fit: () => void;
+  toggleSearch: () => void;
+  reconnect: () => void;
+  respondHostKey: (accept: boolean) => void;
+}
+
+interface TerminalPaneProps {
+  session: TerminalSession;
+  isActive: boolean;
+  fontSize: number;
+  terminalTheme: string;
+  keyboardMode: KeyboardMode;
+  onFontSizeChange: (nextSize: number) => void;
+  onStatusChange: (
+    sessionId: string,
+    status: ConnectionState,
+    extra?: { errorMessage?: string; reconnectAttempt?: number }
+  ) => void;
+  onHostKeyPrompt: (sessionId: string, prompt: HostKeyPrompt | null) => void;
+  onToast: (message: string) => void;
+}
+
+export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
+  (
+    {
+      session,
+      isActive,
+      fontSize,
+      terminalTheme,
+      keyboardMode,
+      onFontSizeChange,
+      onStatusChange,
+      onHostKeyPrompt,
+      onToast,
+    },
+    ref
+  ) => {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const termRef = useRef<Terminal | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const searchAddonRef = useRef<SearchAddon | null>(null);
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectTimerRef = useRef<number | null>(null);
+    const reconnectAttemptRef = useRef(0);
+    const manualCloseRef = useRef(false);
+    const fontSizeRef = useRef(fontSize);
+    fontSizeRef.current = fontSize;
+
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [pasteSheetOpen, setPasteSheetOpen] = useState(false);
+    const [manualPasteText, setManualPasteText] = useState('');
+
+    // Touch pinch-to-zoom & long-press-to-paste state
+    const pinchStartDistRef = useRef<number | null>(null);
+    const pinchStartSizeRef = useRef<number>(fontSize);
+    const longPressTimerRef = useRef<number | null>(null);
+    const longPressStartRef = useRef<{ x: number; y: number } | null>(null);
+
+    const syncTextareaInputMode = useCallback(
+      (mode: KeyboardMode) => {
+        const textarea = containerRef.current?.querySelector(
+          '.xterm-helper-textarea'
+        ) as HTMLTextAreaElement | null;
+        if (!textarea) return;
+        textarea.setAttribute('autocomplete', 'off');
+        textarea.setAttribute('autocorrect', 'off');
+        textarea.setAttribute('autocapitalize', 'off');
+        textarea.setAttribute('spellcheck', 'false');
+        if (mode === 'native') {
+          textarea.removeAttribute('inputmode');
+          textarea.inputMode = 'text';
+        } else {
+          textarea.setAttribute('inputmode', 'none');
+          textarea.inputMode = 'none';
+        }
+      },
+      []
+    );
+
+    const sendRaw = useCallback((data: string) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', data }));
+      }
+    }, []);
+
+    const fitAndResize = useCallback(() => {
+      const fitAddon = fitAddonRef.current;
+      const term = termRef.current;
+      if (!fitAddon || !term) return;
+      try {
+        fitAddon.fit();
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        }
+      } catch {
+        // container hidden or zero-sized
+      }
+    }, []);
+
+    const clearReconnectTimer = useCallback(() => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    }, []);
+
+    const connectSocket = useCallback(async () => {
+      clearReconnectTimer();
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          // ignore
+        }
+        wsRef.current = null;
+      }
+
+      const term = termRef.current;
+      onStatusChange(session.id, 'connecting', {
+        errorMessage: undefined,
+        reconnectAttempt: reconnectAttemptRef.current,
+      });
+
+      let ticket = '';
+      try {
+        const res = await api.issueWsTicket();
+        ticket = res.ticket;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unable to authenticate WebSocket.';
+        onStatusChange(session.id, 'error', { errorMessage: msg });
+        term?.writeln(`\r\n\x1b[31m[xlab-bash] ${msg}\x1b[0m`);
+        return;
+      }
+
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/ws/ssh?ticket=${encodeURIComponent(ticket)}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      let hadConnected = false;
+      let hadTerminalError = false;
+      let heartbeat: number | null = null;
+
+      ws.onopen = () => {
+        const cols = termRef.current?.cols || 80;
+        const rows = termRef.current?.rows || 24;
+
+        if (session.hostId) {
+          ws.send(JSON.stringify({ type: 'connect', hostId: session.hostId, cols, rows }));
+        } else if (session.quickTarget) {
+          ws.send(
+            JSON.stringify({
+              type: 'connect',
+              host: session.quickTarget.host,
+              port: session.quickTarget.port,
+              username: session.quickTarget.username,
+              authType: session.quickTarget.authType,
+              password: session.quickTarget.password,
+              privateKey: session.quickTarget.privateKey,
+              passphrase: session.quickTarget.passphrase,
+              cols,
+              rows,
+            })
+          );
+        }
+
+        heartbeat = window.setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 25_000);
+      };
+
+      ws.onmessage = (event) => {
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(String(event.data)) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+
+        if (msg.type === 'data' && typeof msg.data === 'string') {
+          termRef.current?.write(msg.data);
+          return;
+        }
+
+        if (msg.type === 'status') {
+          if (msg.status === 'connected') {
+            hadConnected = true;
+            reconnectAttemptRef.current = 0;
+            onHostKeyPrompt(session.id, null);
+            onStatusChange(session.id, 'connected', {
+              errorMessage: undefined,
+              reconnectAttempt: 0,
+            });
+            window.setTimeout(fitAndResize, 60);
+          } else if (msg.status === 'connecting' && typeof msg.message === 'string') {
+            termRef.current?.writeln(`\x1b[90m${msg.message}\x1b[0m`);
+          }
+          return;
+        }
+
+        if (msg.type === 'hostkey') {
+          onStatusChange(session.id, 'verifying');
+          onHostKeyPrompt(session.id, {
+            host: String(msg.host || ''),
+            port: Number(msg.port || 22),
+            fingerprint: String(msg.fingerprint || ''),
+            status: msg.status === 'changed' ? 'changed' : 'new',
+            previousFingerprint:
+              typeof msg.previousFingerprint === 'string' ? msg.previousFingerprint : null,
+          });
+          return;
+        }
+
+        if (msg.type === 'error') {
+          hadTerminalError = true;
+          const errorText = String(msg.message || 'SSH connection error');
+          onHostKeyPrompt(session.id, null);
+          onStatusChange(session.id, 'error', { errorMessage: errorText });
+          termRef.current?.writeln(`\r\n\x1b[31m[SSH Error] ${errorText}\x1b[0m`);
+          return;
+        }
+
+        if (msg.type === 'closed') {
+          const reason = String(msg.message || 'Connection closed.');
+          termRef.current?.writeln(`\r\n\x1b[33m[Session Closed] ${reason}\x1b[0m`);
+        }
+      };
+
+      ws.onclose = () => {
+        if (heartbeat !== null) {
+          window.clearInterval(heartbeat);
+          heartbeat = null;
+        }
+        onHostKeyPrompt(session.id, null);
+
+        if (manualCloseRef.current) return;
+
+        // Auto-reconnect on unexpected drops after a session had connected or network hiccup
+        if (hadConnected && !hadTerminalError) {
+          const attempt = reconnectAttemptRef.current + 1;
+          reconnectAttemptRef.current = attempt;
+          const delayMs = Math.min(12_000, 1500 * Math.pow(1.6, attempt - 1));
+          onStatusChange(session.id, 'reconnecting', { reconnectAttempt: attempt });
+          termRef.current?.writeln(
+            `\r\n\x1b[33m[xlab-bash] Connection dropped. Reconnecting in ${(delayMs / 1000).toFixed(1)}s (attempt ${attempt})...\x1b[0m`
+          );
+          reconnectTimerRef.current = window.setTimeout(() => {
+            if (!manualCloseRef.current) {
+              connectSocket();
+            }
+          }, delayMs);
+        } else if (!hadTerminalError) {
+          onStatusChange(session.id, 'disconnected');
+        }
+      };
+    }, [clearReconnectTimer, fitAndResize, onHostKeyPrompt, onStatusChange, session]);
+
+    // Mount xterm.js instance once per session
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const term = new Terminal({
+        cursorBlink: true,
+        cursorStyle: 'block',
+        fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: fontSizeRef.current,
+        fontWeight: '500',
+        fontWeightBold: '700',
+        letterSpacing: 0.2,
+        lineHeight: 1.24,
+        scrollback: 10_000,
+        convertEol: false,
+        allowProposedApi: true,
+        theme: getTerminalTheme(terminalTheme),
+      });
+
+      const fitAddon = new FitAddon();
+      const searchAddon = new SearchAddon();
+      const webLinksAddon = new WebLinksAddon();
+
+      term.loadAddon(fitAddon);
+      term.loadAddon(searchAddon);
+      term.loadAddon(webLinksAddon);
+
+      term.open(container);
+      fitAddon.fit();
+
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
+      searchAddonRef.current = searchAddon;
+
+      syncTextareaInputMode(keyboardMode);
+
+      const dataDisp = term.onData((data) => {
+        sendRaw(data);
+      });
+
+      // Copy on select
+      const selDisp = term.onSelectionChange(() => {
+        const selected = term.getSelection();
+        if (selected && selected.length > 0 && navigator.clipboard?.writeText) {
+          navigator.clipboard
+            .writeText(selected)
+            .then(() => onToast('Copied selection'))
+            .catch(() => {
+              // ignore clipboard permission issues
+            });
+        }
+      });
+
+      // Resize observer for viewport / orientation / keyboard open-close
+      const ro = new ResizeObserver(() => {
+        fitAndResize();
+      });
+      ro.observe(container);
+
+      const onWindowResize = () => fitAndResize();
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('orientationchange', onWindowResize);
+      window.visualViewport?.addEventListener('resize', onWindowResize);
+
+      manualCloseRef.current = false;
+      connectSocket();
+
+      return () => {
+        manualCloseRef.current = true;
+        clearReconnectTimer();
+        ro.disconnect();
+        window.removeEventListener('resize', onWindowResize);
+        window.removeEventListener('orientationchange', onWindowResize);
+        window.visualViewport?.removeEventListener('resize', onWindowResize);
+        dataDisp.dispose();
+        selDisp.dispose();
+        if (wsRef.current) {
+          try {
+            wsRef.current.close();
+          } catch {
+            // ignore
+          }
+          wsRef.current = null;
+        }
+        term.dispose();
+        termRef.current = null;
+        fitAddonRef.current = null;
+        searchAddonRef.current = null;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [session.id]);
+
+    // Sync fontSize updates
+    useEffect(() => {
+      const term = termRef.current;
+      if (!term) return;
+      term.options.fontSize = fontSize;
+      fitAndResize();
+    }, [fontSize, fitAndResize]);
+
+    // Sync Fish / OLED color theme live
+    useEffect(() => {
+      const term = termRef.current;
+      if (!term) return;
+      term.options.theme = getTerminalTheme(terminalTheme);
+    }, [terminalTheme]);
+
+    // Sync keyboard mode inputmode="none" vs native
+    useEffect(() => {
+      syncTextareaInputMode(keyboardMode);
+      if (isActive) {
+        window.setTimeout(fitAndResize, 60);
+      }
+    }, [keyboardMode, isActive, syncTextareaInputMode, fitAndResize]);
+
+    // Refit whenever tab becomes active
+    useEffect(() => {
+      if (isActive) {
+        window.setTimeout(fitAndResize, 40);
+      }
+    }, [isActive, fitAndResize]);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        sendData: (data: string) => sendRaw(data),
+        focusTerminal: (allowNativeKeyboard = false) => {
+          syncTextareaInputMode(allowNativeKeyboard ? 'native' : keyboardMode);
+          termRef.current?.focus();
+        },
+        fit: fitAndResize,
+        toggleSearch: () => setSearchOpen((prev) => !prev),
+        reconnect: () => {
+          reconnectAttemptRef.current = 0;
+          connectSocket();
+        },
+        respondHostKey: (accept: boolean) => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'hostkey:decision', accept }));
+          }
+          onHostKeyPrompt(session.id, null);
+        },
+      }),
+      [connectSocket, fitAndResize, keyboardMode, onHostKeyPrompt, sendRaw, session.id, syncTextareaInputMode]
+    );
+
+    // Long-press to paste + pinch-to-zoom handlers
+    const triggerPaste = useCallback(async () => {
+      try {
+        if (navigator.clipboard?.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            sendRaw(text);
+            onToast('Pasted clipboard');
+            return;
+          }
+        }
+      } catch {
+        // Fall back to paste sheet when clipboard permission is denied
+      }
+      setManualPasteText('');
+      setPasteSheetOpen(true);
+    }, [onToast, sendRaw]);
+
+    const clearLongPress = () => {
+      if (longPressTimerRef.current !== null) {
+        window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      longPressStartRef.current = null;
+    };
+
+    const handleTouchStart = (e: React.TouchEvent) => {
+      if (e.touches.length === 2) {
+        clearLongPress();
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        pinchStartDistRef.current = Math.hypot(dx, dy);
+        pinchStartSizeRef.current = fontSizeRef.current;
+        return;
+      }
+
+      if (e.touches.length === 1) {
+        pinchStartDistRef.current = null;
+        const t = e.touches[0];
+        longPressStartRef.current = { x: t.clientX, y: t.clientY };
+        longPressTimerRef.current = window.setTimeout(() => {
+          if (navigator.vibrate) {
+            try {
+              navigator.vibrate(18);
+            } catch {
+              // ignore
+            }
+          }
+          triggerPaste();
+        }, 550);
+      }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+      if (e.touches.length === 2 && pinchStartDistRef.current !== null) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.hypot(dx, dy);
+        const ratio = dist / pinchStartDistRef.current;
+        const nextSize = Math.min(26, Math.max(9, Math.round(pinchStartSizeRef.current * ratio)));
+        if (nextSize !== fontSizeRef.current) {
+          onFontSizeChange(nextSize);
+        }
+        return;
+      }
+
+      if (e.touches.length === 1 && longPressStartRef.current) {
+        const t = e.touches[0];
+        const moved = Math.hypot(
+          t.clientX - longPressStartRef.current.x,
+          t.clientY - longPressStartRef.current.y
+        );
+        if (moved > 10) {
+          clearLongPress();
+        }
+      }
+    };
+
+    const handleTouchEnd = () => {
+      pinchStartDistRef.current = null;
+      clearLongPress();
+    };
+
+    const handleSearchNext = () => {
+      if (searchQuery) searchAddonRef.current?.findNext(searchQuery);
+    };
+    const handleSearchPrev = () => {
+      if (searchQuery) searchAddonRef.current?.findPrevious(searchQuery);
+    };
+
+    return (
+      <div
+        className={`relative flex-1 min-h-0 w-full bg-black ${isActive ? 'flex flex-col' : 'hidden'}`}
+      >
+        {/* Search Overlay */}
+        {searchOpen && (
+          <div className="absolute top-2 right-2 z-30 flex items-center gap-1 rounded-xl border border-zinc-700 bg-zinc-950/95 px-2.5 py-1.5 shadow-xl">
+            <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value) {
+                  searchAddonRef.current?.findNext(e.target.value);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.shiftKey ? handleSearchPrev() : handleSearchNext();
+                } else if (e.key === 'Escape') {
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder="Find in terminal..."
+              className="w-36 sm:w-48 bg-transparent text-xs font-mono-term text-zinc-100 placeholder:text-zinc-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleSearchPrev}
+              className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              aria-label="Previous match"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleSearchNext}
+              className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              aria-label="Next match"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setSearchOpen(false)}
+              className="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              aria-label="Close search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Reconnect / Error Floating Bar */}
+        {(session.status === 'reconnecting' ||
+          session.status === 'disconnected' ||
+          session.status === 'error') && (
+          <div className="z-20 flex items-center justify-between gap-3 px-3 py-2 bg-zinc-950 border-b border-zinc-800 text-xs">
+            <span className="text-zinc-300 truncate">
+              {session.status === 'reconnecting'
+                ? `Reconnecting (attempt ${session.reconnectAttempt})...`
+                : session.errorMessage || 'Session disconnected'}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                reconnectAttemptRef.current = 0;
+                connectSocket();
+              }}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md btn-accent font-semibold shrink-0 transition"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Reconnect</span>
+            </button>
+          </div>
+        )}
+
+        {/* xterm.js pure black viewport */}
+        <div
+          ref={containerRef}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+          onClick={() => {
+            syncTextareaInputMode(keyboardMode);
+            if (keyboardMode === 'native') {
+              termRef.current?.focus();
+            }
+          }}
+          className="flex-1 min-h-0 w-full bg-black overflow-hidden"
+        />
+
+        {/* Fallback Paste Modal when browser blocks navigator.clipboard.readText() */}
+        {pasteSheetOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+                  <ClipboardPaste className="w-4 h-4 text-accent" />
+                  <span>Paste into Terminal</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPasteSheetOpen(false)}
+                  className="p-1 text-zinc-400 hover:text-zinc-100"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <textarea
+                autoFocus
+                rows={4}
+                value={manualPasteText}
+                onChange={(e) => setManualPasteText(e.target.value)}
+                placeholder="Long-press here and tap Paste..."
+                className="mt-3 w-full rounded-xl border border-zinc-800 bg-black p-3 text-xs font-mono-term text-zinc-100 placeholder:text-zinc-600 focus-accent"
+              />
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPasteSheetOpen(false)}
+                  className="h-9 px-3.5 rounded-lg border border-zinc-800 text-xs text-zinc-300 hover:bg-zinc-900"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (manualPasteText) {
+                      sendRaw(manualPasteText);
+                      onToast('Pasted text');
+                    }
+                    setPasteSheetOpen(false);
+                  }}
+                  className="h-9 px-4 rounded-lg btn-accent text-xs font-semibold transition"
+                >
+                  Send to Shell
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+
+TerminalPane.displayName = 'TerminalPane';
