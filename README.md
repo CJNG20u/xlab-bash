@@ -23,7 +23,7 @@ docker pull ghcr.io/cjng20u/xlab-bash:latest
 SSH on a phone usually means a choice between two bad options. Terminal apps like Termux or JuiceSSH depend on the phone's own keyboard, which has no real `Ctrl`, `Esc`, `Tab` or arrow keys, so `vim`, `htop` and `tmux` become a fight. Browser consoles like noVNC or WebRTC-based remote desktops stream pixels, which is laggy, blurry and heavy on mobile data.
 
 **xlab-bash** takes a text-first approach:
-- **Real PTY, not pixels:** The server opens a genuine `ssh2` shell and streams plain text over one WebSocket. `xterm.js` renders it locally, so it's sharp at any zoom, fast on a weak signal, and copy/paste works like text.
+- **Real PTY, not pixels:** The server opens a genuine `ssh2` shell and streams plain text over one WebSocket. `xterm.js` renders it locally, so it's sharp at any zoom, fast on a weak signal, and you can select and copy it like any text on your phone, which a VNC or WebRTC picture can never do.
 - **A keyboard made for shells:** A built-in developer keyboard replaces the Android keyboard with sticky `Ctrl`/`Alt`/`Shift`, arrows, `Home`/`End`/`PgUp`/`PgDn`, a quick bar for `Ctrl+C` / `Ctrl+R` / `Tab`, and one-tap snippets like `qm list` and `pct list`.
 - **Your hosts, your server:** Saved hosts and private keys stay encrypted (AES-256-GCM) in SQLite on your own box. Nothing is stored in the browser and nothing goes through a third-party relay.
 - **Built for flaky mobile connections:** Shells keep running on the server when your phone sleeps or switches networks, and pick up where you left off, no `tmux` required.
@@ -35,6 +35,7 @@ SSH on a phone usually means a choice between two bad options. Terminal apps lik
 
 - **Real Interactive SSH PTY**: `xterm.js` (`xterm-256color`, 10,000-line scrollback, fit, clickable links, search) piped into `ssh2` over WebSocket, with Fish-inspired color themes (`Fish Vivid`, `Fish Aurora`, `Fish Sunset`, `OLED Classic`). Works with `vim`, `htop`, `nano` and `tmux`.
 - **Built-In Developer Keyboard**: Large on-screen PC-style keyboard with a `123` toggle, `Ctrl`, `Shift`, `Alt`, `Fn/Sym`, arrows and navigation keys. Uses `inputmode="none"` to keep the Android keyboard away, with sticky/double-tap-lock modifiers, hold-to-repeat, spacebar swipe cursor scrubbing, key-preview popups, haptics, and a JSON layout editor.
+- **Phone-Native Copy & Paste**: Long-press to select text with real Android/iOS selection handles, magnifier and word snapping, instead of fighting a canvas. Copy a selection, the screen or the whole scrollback, re-insert text into the prompt, and paste with a multi-line safety check.
 - **Quick Bar & Snippets**: One-tap shell combos (`Esc`, `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, `Ctrl+L`, `Ctrl+R`, `Ctrl+A`, `Ctrl+E`, `Tab`, `|`, `~`, `/`, `$`) plus a swipeable row of your own snippets (`qm list`, `pct list`, `systemctl status`, `docker ps`, `journalctl -f`, `htop`…).
 - **Encrypted Host Vault**: Saved hosts (password or PEM/OpenSSH private key with passphrase) stored in SQLite with AES-256-GCM encryption. Credentials never touch `localStorage`.
 - **Host Key Verification**: Shows the SHA-256 host key fingerprint on first connect and warns loudly if a host key changes.
@@ -164,7 +165,9 @@ Keep `TRUST_PROXY=1` in `.env` (see [Login & Security](#login--security)).
 - **Sticky Modifiers**: Tap `Ctrl`, `Alt`, or `Shift` once for one-shot; double-tap to lock; tap again to release.
 - **Cursor Scrubbing**: Swipe left or right across the `Space` bar to move the terminal cursor precisely.
 - **Zoom Font Size**: Pinch with two fingers on the terminal or use `-` / `+` in the toolbar or settings.
-- **Copy & Paste**: Select text to copy automatically; long-press on the terminal to paste.
+- **Select & Copy**: Long-press anywhere in the terminal (or tap **Copy** in the quick bar). The word under your finger is selected using your phone's own selection handles and magnifier. Drag to adjust, then tap **Copy**, **Insert** (type it back into the shell), **Copy screen** or **Copy all**. Long commands and URLs that wrap across lines copy as one piece.
+- **Paste**: Tap **Paste** in the quick bar. Multi-line text is shown for review first so a pasted script can't run by accident. On plain HTTP, where browsers block clipboard reading, a paste box opens; long-press it and use the phone's Paste.
+- **Desktop**: Mouse selection copies automatically; `Ctrl+Shift+C` / `Ctrl+Shift+V` copy and paste.
 
 ---
 

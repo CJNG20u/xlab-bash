@@ -19,6 +19,7 @@ import React, {
   useState,
 } from 'react';
 import { api } from '../lib/api.ts';
+import { type SelectAnchor, TextSelectSheet, writeClipboard } from './TextSelectSheet.tsx';
 import { getTerminalTheme } from '../lib/terminalThemes.ts';
 import type {
   ConnectionState,
@@ -34,6 +35,10 @@ export interface TerminalPaneHandle {
   toggleSearch: () => void;
   reconnect: () => void;
   respondHostKey: (accept: boolean) => void;
+  /** Open the touch-friendly text selection sheet */
+  openSelect: () => void;
+  /** Paste from the clipboard (multi-line pastes ask first) */
+  paste: () => void;
 }
 
 interface TerminalPaneProps {
@@ -87,6 +92,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
     const [searchQuery, setSearchQuery] = useState('');
     const [pasteSheetOpen, setPasteSheetOpen] = useState(false);
     const [manualPasteText, setManualPasteText] = useState('');
+    // true when the paste sheet is confirming a multi-line clipboard paste
+    const [pasteNeedsConfirm, setPasteNeedsConfirm] = useState(false);
+    const [selectOpen, setSelectOpen] = useState(false);
+    const [selectAnchor, setSelectAnchor] = useState<SelectAnchor | null>(null);
 
     // Touch pinch-to-zoom & long-press-to-paste state
     const pinchStartDistRef = useRef<number | null>(null);
@@ -403,14 +412,31 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       // Copy on select
       const selDisp = term.onSelectionChange(() => {
         const selected = term.getSelection();
-        if (selected && selected.length > 0 && navigator.clipboard?.writeText) {
-          navigator.clipboard
-            .writeText(selected)
-            .then(() => onToast('Copied selection'))
-            .catch(() => {
-              // ignore clipboard permission issues
-            });
+        if (selected && selected.length > 0) {
+          writeClipboard(selected).then((ok) => {
+            if (ok) onToast('Copied selection');
+          });
         }
+      });
+
+      // Desktop shortcuts: Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== 'keydown' || !ev.ctrlKey || !ev.shiftKey) return true;
+        const key = ev.key.toLowerCase();
+        if (key === 'c') {
+          const selected = term.getSelection();
+          if (selected) {
+            writeClipboard(selected).then((ok) => ok && onToast('Copied selection'));
+          }
+          ev.preventDefault();
+          return false;
+        }
+        if (key === 'v') {
+          ev.preventDefault();
+          pasteRef.current();
+          return false;
+        }
+        return true;
       });
 
       // Resize observer for viewport / orientation / keyboard open-close
@@ -520,6 +546,8 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           reconnectAttemptRef.current = 0;
           connectSocket();
         },
+        openSelect: () => openSelectAt(),
+        paste: () => triggerPaste(),
         respondHostKey: (accept: boolean) => {
           const ws = wsRef.current;
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -528,26 +556,82 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           onHostKeyPrompt(session.id, null);
         },
       }),
-      [connectSocket, fitAndResize, keyboardMode, onHostKeyPrompt, sendRaw, session.id, syncTextareaInputMode]
+      [
+        connectSocket,
+        fitAndResize,
+        keyboardMode,
+        onHostKeyPrompt,
+        openSelectAt,
+        sendRaw,
+        session.id,
+        syncTextareaInputMode,
+        triggerPaste,
+      ]
     );
 
-    // Long-press to paste + pinch-to-zoom handlers
+    // Paste goes through xterm's paste() so bracketed-paste mode and line
+    // endings are handled like a desktop terminal. Multi-line text could run
+    // several commands at once, so it's shown for review first.
+    const pasteText = useCallback(
+      (text: string, confirmed = false) => {
+        if (!text) return;
+        if (!confirmed && /[\r\n]/.test(text.replace(/[\r\n]+$/, ''))) {
+          setManualPasteText(text);
+          setPasteNeedsConfirm(true);
+          setPasteSheetOpen(true);
+          return;
+        }
+        const term = termRef.current;
+        if (term) {
+          term.paste(text);
+        } else {
+          sendRaw(text);
+        }
+        onToast('Pasted');
+      },
+      [onToast, sendRaw]
+    );
+
     const triggerPaste = useCallback(async () => {
       try {
         if (navigator.clipboard?.readText) {
           const text = await navigator.clipboard.readText();
           if (text) {
-            sendRaw(text);
-            onToast('Pasted clipboard');
+            pasteText(text);
             return;
           }
         }
       } catch {
-        // Fall back to paste sheet when clipboard permission is denied
+        // Clipboard read blocked (plain HTTP or permission denied): use the paste sheet
       }
       setManualPasteText('');
+      setPasteNeedsConfirm(false);
       setPasteSheetOpen(true);
-    }, [onToast, sendRaw]);
+    }, [pasteText]);
+
+    const pasteRef = useRef(triggerPaste);
+    pasteRef.current = triggerPaste;
+
+    /** Open selection mode, optionally at the screen point the user long-pressed. */
+    const openSelectAt = useCallback((clientX?: number, clientY?: number) => {
+      const term = termRef.current;
+      if (!term) return;
+      let anchor: SelectAnchor | null = null;
+      const screen = containerRef.current?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (screen && clientX !== undefined && clientY !== undefined) {
+        const rect = screen.getBoundingClientRect();
+        const cellH = rect.height / term.rows;
+        const cellW = rect.width / term.cols;
+        const rowInView = Math.floor((clientY - rect.top) / cellH);
+        const col = Math.floor((clientX - rect.left) / cellW);
+        if (rowInView >= 0 && rowInView < term.rows && col >= 0) {
+          anchor = { row: term.buffer.active.viewportY + rowInView, col: Math.min(col, term.cols - 1) };
+        }
+      }
+      term.blur();
+      setSelectAnchor(anchor);
+      setSelectOpen(true);
+    }, []);
 
     const clearLongPress = () => {
       if (longPressTimerRef.current !== null) {
@@ -579,8 +663,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               // ignore
             }
           }
-          triggerPaste();
-        }, 550);
+          // Long-press works like any phone app: select the word under the finger
+          const start = longPressStartRef.current;
+          openSelectAt(start?.x, start?.y);
+        }, 500);
       }
     };
 
@@ -716,6 +802,22 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           className="flex-1 min-h-0 w-full bg-black overflow-hidden"
         />
 
+        {/* Touch-friendly text selection (native phone selection handles) */}
+        {selectOpen && termRef.current && (
+          <TextSelectSheet
+            term={termRef.current}
+            fontSize={fontSize}
+            anchor={selectAnchor}
+            onClose={() => {
+              setSelectOpen(false);
+              setSelectAnchor(null);
+            }}
+            onPaste={triggerPaste}
+            onSendText={(text) => pasteText(text, true)}
+            onToast={onToast}
+          />
+        )}
+
         {/* Fallback Paste Modal when browser blocks navigator.clipboard.readText() */}
         {pasteSheetOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
@@ -723,20 +825,29 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
                   <ClipboardPaste className="w-4 h-4 text-accent" />
-                  <span>Paste into Terminal</span>
+                  <span>{pasteNeedsConfirm ? 'Paste multiple lines?' : 'Paste into Terminal'}</span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setPasteSheetOpen(false)}
+                  onClick={() => {
+                    setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
+                  }}
                   className="p-1 text-zinc-400 hover:text-zinc-100"
                   aria-label="Close"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
+              {pasteNeedsConfirm && (
+                <p className="mt-2 text-xs text-amber-400/90">
+                  This text has {manualPasteText.split(/\r\n|\r|\n/).length} lines and may run several
+                  commands. Check it, edit if needed, then send.
+                </p>
+              )}
               <textarea
-                autoFocus
-                rows={4}
+                autoFocus={!pasteNeedsConfirm}
+                rows={pasteNeedsConfirm ? 7 : 4}
                 value={manualPasteText}
                 onChange={(e) => setManualPasteText(e.target.value)}
                 placeholder="Long-press here and tap Paste..."
@@ -745,7 +856,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               <div className="mt-3 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setPasteSheetOpen(false)}
+                  onClick={() => {
+                    setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
+                  }}
                   className="h-9 px-3.5 rounded-lg border border-zinc-800 text-xs text-zinc-300 hover:bg-zinc-900"
                 >
                   Cancel
@@ -754,10 +868,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
                   type="button"
                   onClick={() => {
                     if (manualPasteText) {
-                      sendRaw(manualPasteText);
-                      onToast('Pasted text');
+                      pasteText(manualPasteText, true);
                     }
                     setPasteSheetOpen(false);
+                    setPasteNeedsConfirm(false);
                   }}
                   className="h-9 px-4 rounded-lg btn-accent text-xs font-semibold transition"
                 >
