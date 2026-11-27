@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardPaste,
+  Loader2,
   RefreshCw,
   Search,
   X,
@@ -170,6 +171,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         reconnectAttempt: reconnectAttemptRef.current,
       });
 
+      term?.writeln(
+        `\x1b[36m[xlab-bash]\x1b[0m Connecting to \x1b[1m${session.subtitle || session.title}\x1b[0m...`
+      );
+
       let ticket = '';
       try {
         const res = await api.issueWsTicket();
@@ -186,6 +191,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
+      let wsOpened = false;
       let hadConnected = false;
       let hadTerminalError = false;
       let heartbeat: number | null = null;
@@ -221,6 +227,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
       };
 
       ws.onopen = () => {
+        wsOpened = true;
         const cols = termRef.current?.cols || 80;
         const rows = termRef.current?.rows || 24;
 
@@ -298,7 +305,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
             });
             window.setTimeout(fitAndResize, 60);
           } else if (msg.status === 'connecting' && typeof msg.message === 'string') {
-            termRef.current?.writeln(`\x1b[90m${msg.message}\x1b[0m`);
+            termRef.current?.writeln(`\x1b[38;5;248m${msg.message}\x1b[0m`);
           }
           return;
         }
@@ -338,7 +345,11 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         }
       };
 
-      ws.onclose = () => {
+      ws.onerror = () => {
+        // Detailed error handling happens in onclose right after onerror.
+      };
+
+      ws.onclose = (ev) => {
         if (heartbeat !== null) {
           window.clearInterval(heartbeat);
           heartbeat = null;
@@ -362,6 +373,10 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
               connectSocket();
             }
           }, delayMs);
+        } else if (!wsOpened && !hadTerminalError) {
+          const msg = `WebSocket connection to backend failed (code ${ev.code || 1006}). Reload or tap Reconnect.`;
+          onStatusChange(session.id, 'error', { errorMessage: msg });
+          termRef.current?.writeln(`\r\n\x1b[31m[xlab-bash] ${msg}\x1b[0m`);
         } else if (!hadTerminalError) {
           onStatusChange(session.id, 'disconnected');
         }
@@ -398,6 +413,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
 
       term.open(container);
       fitAddon.fit();
+      window.requestAnimationFrame(() => fitAndResize());
 
       termRef.current = term;
       fitAddonRef.current = fitAddon;
@@ -762,12 +778,26 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
           </div>
         )}
 
+        {/* Live Connecting / Host Key Verifying Bar */}
+        {(session.status === 'connecting' || session.status === 'verifying') && (
+          <div className="z-20 flex items-center justify-between gap-3 px-3 py-2 bg-zinc-950 border-b border-zinc-800 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <Loader2 className="w-3.5 h-3.5 text-accent animate-spin shrink-0" />
+              <span className="text-zinc-200 truncate font-mono-term">
+                {session.status === 'verifying'
+                  ? `Confirm host key fingerprint for ${session.subtitle}...`
+                  : `Connecting to ${session.subtitle || session.title}...`}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Reconnect / Error Floating Bar */}
         {(session.status === 'reconnecting' ||
           session.status === 'disconnected' ||
           session.status === 'error') && (
-          <div className="z-20 flex items-center justify-between gap-3 px-3 py-2 bg-zinc-950 border-b border-zinc-800 text-xs">
-            <span className="text-zinc-300 truncate">
+          <div className="z-20 flex items-start sm:items-center justify-between gap-3 px-3 py-2.5 bg-zinc-950 border-b border-zinc-800 text-xs">
+            <span className="text-zinc-200 leading-relaxed break-words">
               {session.status === 'reconnecting'
                 ? `Reconnecting (attempt ${session.reconnectAttempt})...`
                 : session.errorMessage || 'Session disconnected'}
@@ -778,7 +808,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
                 reconnectAttemptRef.current = 0;
                 connectSocket();
               }}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md btn-accent font-semibold shrink-0 transition"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md btn-accent font-semibold shrink-0 transition"
             >
               <RefreshCw className="w-3 h-3" />
               <span>Reconnect</span>

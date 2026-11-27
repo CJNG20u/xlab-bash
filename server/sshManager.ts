@@ -255,17 +255,41 @@ function clampDim(val: unknown, fallback: number, min: number, max: number): num
   return Math.max(min, Math.min(max, Math.round(n)));
 }
 
+function isPrivateOrLocalHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h.endsWith('.local') || h.endsWith('.lan') || h.endsWith('.internal')) {
+    return true;
+  }
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  const m = /^172\.(\d+)\./.exec(h);
+  if (m) {
+    const second = Number(m[1]);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
 function readableSshError(err: Error, host: string, port: number): string {
   const level = (err as Error & { level?: string }).level;
   const message = err.message || 'SSH connection error';
+  const lanHint = isPrivateOrLocalHost(host)
+    ? ' Note: private/LAN addresses (e.g. 192.168.x.x, 10.x.x.x) are only reachable when xlab-bash is self-hosted on the same network (Docker) or over VPN/Tailscale—cloud previews can only reach public hosts.'
+    : '';
   if (level === 'client-authentication') {
     return 'Authentication failed. Check your username, password, or private key.';
   }
-  if (message.includes('ECONNREFUSED')) return `Connection refused by ${host}:${port}.`;
-  if (message.includes('ETIMEDOUT') || message.includes('Timed out')) {
-    return `Connection timed out reaching ${host}:${port}.`;
+  if (message.includes('ECONNREFUSED')) {
+    return `Connection refused by ${host}:${port}. Make sure sshd is running on port ${port}.${lanHint}`;
   }
-  if (message.includes('ENOTFOUND')) return `Host not found: ${host}.`;
+  if (message.includes('ETIMEDOUT') || message.includes('Timed out')) {
+    return `Connection timed out reaching ${host}:${port}.${lanHint}`;
+  }
+  if (message.includes('EHOSTUNREACH') || message.includes('ENETUNREACH')) {
+    return `Host unreachable: ${host}:${port}.${lanHint}`;
+  }
+  if (message.includes('ENOTFOUND')) {
+    return `Host not found: ${host}.${lanHint}`;
+  }
   return message;
 }
 
@@ -540,7 +564,7 @@ export function attachSshWebSocketServer(wss: WebSocketServer): void {
         host: targetHost,
         port: targetPort,
         username: targetUsername,
-        readyTimeout: 20_000,
+        readyTimeout: 15_000,
         keepaliveInterval: 15_000,
         keepaliveCountMax: 4,
         hostVerifier: (keyBlob: Buffer, verifyCallback: (valid: boolean) => void) => {
@@ -598,26 +622,37 @@ export function attachSshWebSocketServer(wss: WebSocketServer): void {
   });
 }
 
+function normalizeHost(raw: string): string {
+  return raw.trim().toLowerCase().replace(/:(80|443)$/, '');
+}
+
 function isAllowedOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
   // Non-browser clients (no Origin header) still need a valid ticket or session below.
   if (!origin) return true;
   let originHost: string;
   try {
-    originHost = new URL(origin).host.toLowerCase();
+    originHost = normalizeHost(new URL(origin).host);
   } catch {
     return false;
   }
   const candidates = new Set<string>();
   const host = req.headers.host;
-  if (host) candidates.add(host.toLowerCase());
+  if (host) candidates.add(normalizeHost(host));
   const fwdHost = req.headers['x-forwarded-host'];
   if (typeof fwdHost === 'string' && fwdHost) {
-    candidates.add(fwdHost.split(',')[0].trim().toLowerCase());
+    candidates.add(normalizeHost(fwdHost.split(',')[0]));
+  }
+  if (process.env.APP_URL) {
+    try {
+      candidates.add(normalizeHost(new URL(process.env.APP_URL).host));
+    } catch {
+      // ignore malformed APP_URL
+    }
   }
   for (const extra of (process.env.ALLOWED_ORIGINS || '').split(',')) {
-    const clean = extra.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
-    if (clean) candidates.add(clean);
+    const clean = extra.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (clean) candidates.add(normalizeHost(clean));
   }
   return candidates.has(originHost);
 }
@@ -634,20 +669,22 @@ export function handleSshUpgrade(
     return;
   }
 
-  // Block cross-site WebSocket hijacking: browsers always send Origin on WS upgrades,
-  // so a page on another site must not be able to open a shell with our session cookie.
-  if (!isAllowedOrigin(req)) {
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
+  // Prefer single-use ticket issued via Same-Origin POST /api/ws-ticket.
+  // Tickets are immune to cross-site WebSocket hijacking even behind proxies that
+  // rewrite Host headers without forwarding X-Forwarded-Host.
   let authenticatedUser: string | null = null;
   const ticket = url.searchParams.get('ticket');
   if (ticket) {
     authenticatedUser = consumeWsTicket(ticket);
   }
+
   if (!authenticatedUser) {
+    // Cookie-only WebSocket upgrades must come from an allowed same-origin host.
+    if (!isAllowedOrigin(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     const cookies = parseCookieHeader(req.headers.cookie);
     authenticatedUser = verifySessionToken(cookies[SESSION_COOKIE_NAME]);
   }
