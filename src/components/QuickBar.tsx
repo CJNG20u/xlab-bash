@@ -1,4 +1,4 @@
-import { ClipboardPaste, Copy, CornerDownLeft, Plus } from 'lucide-react';
+import { ClipboardPaste, CornerDownLeft, Plus } from 'lucide-react';
 import React from 'react';
 import { unescapeSequence } from '../lib/keySequences.ts';
 import type { QuickBarItem, SnippetItem } from '../types/index.ts';
@@ -9,7 +9,6 @@ interface QuickBarProps {
   hapticEnabled: boolean;
   onSendSequence: (seq: string) => void;
   onOpenSnippetsSettings: () => void;
-  onSelectText: () => void;
   onPaste: () => void;
 }
 
@@ -19,7 +18,6 @@ export const QuickBar: React.FC<QuickBarProps> = ({
   hapticEnabled,
   onSendSequence,
   onOpenSnippetsSettings,
-  onSelectText,
   onPaste,
 }) => {
   const triggerHaptic = () => {
@@ -48,20 +46,7 @@ export const QuickBar: React.FC<QuickBarProps> = ({
     <div className="w-full bg-[#09090b] border-t border-zinc-800/90 select-none shrink-0">
       {/* Row 1: One-tap combos & shell symbols */}
       <div className="flex items-center gap-1 px-1.5 py-1 overflow-x-auto no-scrollbar border-b border-zinc-900">
-        {/* Copy / paste helpers (click so the browser grants clipboard access) */}
-        <button
-          type="button"
-          onClick={() => {
-            triggerHaptic();
-            onSelectText();
-          }}
-          className="dev-key shrink-0 h-8 px-2 rounded-md bg-zinc-950 border border-zinc-800/90 text-zinc-200 hover:bg-zinc-900 inline-flex items-center gap-1 text-[12px] active-accent"
-          aria-label="Select and copy text"
-          title="Select & copy text (or long-press the terminal)"
-        >
-          <Copy className="w-3.5 h-3.5 text-accent" />
-          <span>Copy</span>
-        </button>
+        {/* Paste helper (click so the browser grants clipboard access) */}
         <button
           type="button"
           onClick={() => {

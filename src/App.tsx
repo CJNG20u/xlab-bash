@@ -610,7 +610,6 @@ export default function App() {
               setSettingsTab('snippets');
               setSettingsOpen(true);
             }}
-            onSelectText={() => activeSession && paneRefs.current[activeSession.id]?.openSelect()}
             onPaste={() => activeSession && paneRefs.current[activeSession.id]?.paste()}
           />
         )}
