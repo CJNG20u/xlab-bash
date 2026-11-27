@@ -9,14 +9,14 @@ import {
   verifyPasswordHash,
 } from './crypto.ts';
 import { claimAdminOnce, getClaimedAdmin } from './db.ts';
+import { getJwtSecret } from './secrets.ts';
 
 export const SESSION_COOKIE_NAME = 'termdock_session';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
-const JWT_SECRET =
-  process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 16
-    ? process.env.JWT_SECRET.trim()
-    : crypto.randomBytes(32).toString('hex');
+// From JWT_SECRET, or generated once and saved in DATA_DIR/secrets.json so
+// sessions survive container restarts.
+const JWT_SECRET = getJwtSecret();
 
 interface SessionPayload {
   sub: string;
@@ -76,7 +76,7 @@ export function verifyCredentials(username: string, password: string): boolean {
 export function performFirstRunSetup(username: string, password: string): boolean {
   if (isEnvAuthActive()) return false;
   const cleanUser = username.trim();
-  if (cleanUser.length < 2 || cleanUser.length > 64 || password.length < 6) {
+  if (cleanUser.length < 2 || cleanUser.length > 64 || password.length < 10) {
     return false;
   }
   const hashed = hashPassword(password);
@@ -97,39 +97,27 @@ export function verifySessionToken(token: string | undefined | null): string | n
   }
 }
 
-export function setSessionCookie(res: Response, token: string): void {
-  const isSecure =
-    res.req.secure ||
-    res.req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
+// Secure only when the browser actually reached us over HTTPS (directly or via a
+// trusted proxy). A Secure cookie on plain http://<lan-ip>:8022 is silently dropped,
+// which logged you out on every reload. SameSite=Lax keeps the cookie off
+// cross-site requests and WebSocket upgrades started by other sites.
+function cookieAttributes(res: Response): string[] {
+  const isSecure = res.req.secure;
+  return isSecure ? ['HttpOnly', 'Secure', 'SameSite=Lax'] : ['HttpOnly', 'SameSite=Lax'];
+}
 
+export function setSessionCookie(res: Response, token: string): void {
   const parts = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     'Path=/',
     `Max-Age=${SESSION_TTL_SECONDS}`,
-    'HttpOnly',
+    ...cookieAttributes(res),
   ];
-
-  if (isSecure) {
-    parts.push('Secure', 'SameSite=None', 'Partitioned');
-  } else {
-    parts.push('SameSite=Lax');
-  }
-
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 export function clearSessionCookie(res: Response): void {
-  const isSecure =
-    res.req.secure ||
-    res.req.headers['x-forwarded-proto'] === 'https' ||
-    process.env.NODE_ENV === 'production';
-  const parts = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'Max-Age=0', 'HttpOnly'];
-  if (isSecure) {
-    parts.push('Secure', 'SameSite=None', 'Partitioned');
-  } else {
-    parts.push('SameSite=Lax');
-  }
+  const parts = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'Max-Age=0', ...cookieAttributes(res)];
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
+import { StringDecoder } from 'string_decoder';
 import { Client, type ClientChannel, type ConnectConfig } from 'ssh2';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
@@ -268,12 +269,19 @@ export function attachSshWebSocketServer(wss: WebSocketServer): void {
               }
               shellStream = stream;
 
+              // Multi-byte UTF-8 characters (box drawing in htop/tmux, emoji) can be split
+              // across SSH packets; a StringDecoder holds partial bytes until complete.
+              const stdoutDecoder = new StringDecoder('utf8');
+              const stderrDecoder = new StringDecoder('utf8');
+
               stream.on('data', (chunk: Buffer) => {
-                sendJson(ws, { type: 'data', data: chunk.toString('utf8') });
+                const text = stdoutDecoder.write(chunk);
+                if (text) sendJson(ws, { type: 'data', data: text });
               });
 
               stream.stderr.on('data', (chunk: Buffer) => {
-                sendJson(ws, { type: 'data', data: chunk.toString('utf8') });
+                const text = stderrDecoder.write(chunk);
+                if (text) sendJson(ws, { type: 'data', data: text });
               });
 
               stream.on('close', () => {
@@ -389,6 +397,30 @@ export function attachSshWebSocketServer(wss: WebSocketServer): void {
   });
 }
 
+function isAllowedOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  // Non-browser clients (no Origin header) still need a valid ticket or session below.
+  if (!origin) return true;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  const candidates = new Set<string>();
+  const host = req.headers.host;
+  if (host) candidates.add(host.toLowerCase());
+  const fwdHost = req.headers['x-forwarded-host'];
+  if (typeof fwdHost === 'string' && fwdHost) {
+    candidates.add(fwdHost.split(',')[0].trim().toLowerCase());
+  }
+  for (const extra of (process.env.ALLOWED_ORIGINS || '').split(',')) {
+    const clean = extra.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    if (clean) candidates.add(clean);
+  }
+  return candidates.has(originHost);
+}
+
 export function handleSshUpgrade(
   wss: WebSocketServer,
   req: IncomingMessage,
@@ -397,6 +429,14 @@ export function handleSshUpgrade(
 ): void {
   const url = new URL(req.url || '/', 'http://localhost');
   if (url.pathname !== '/ws/ssh') {
+    socket.destroy();
+    return;
+  }
+
+  // Block cross-site WebSocket hijacking: browsers always send Origin on WS upgrades,
+  // so a page on another site must not be able to open a shell with our session cookie.
+  if (!isAllowedOrigin(req)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
     socket.destroy();
     return;
   }

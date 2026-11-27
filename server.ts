@@ -125,8 +125,8 @@ async function startServer() {
       res.status(400).json({ error: 'Username must be 2–64 characters.' });
       return;
     }
-    if (password.length < 6) {
-      res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    if (password.length < 10) {
+      res.status(400).json({ error: 'Password must be at least 10 characters.' });
       return;
     }
 
@@ -327,7 +327,8 @@ async function startServer() {
   // --- Frontend Static / Vite Dev Middleware ---
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ noServer: true });
+  // 1 MB cap per message (pasted keys/text fit easily; default is 100 MB)
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   attachSshWebSocketServer(wss);
 
   server.on('upgrade', (req, socket, head) => {

@@ -117,11 +117,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authStatus, onAuthentica
                 type="password"
                 autoComplete={isSetup ? 'new-password' : 'current-password'}
                 required
-                minLength={isSetup ? 6 : 1}
+                minLength={isSetup ? 10 : 1}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full h-11 rounded-xl border border-zinc-800 bg-black px-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus-accent transition"
-                placeholder={isSetup ? 'Minimum 6 characters' : 'Enter password'}
+                placeholder={isSetup ? 'Minimum 10 characters' : 'Enter password'}
               />
             </div>
 
@@ -138,7 +138,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authStatus, onAuthentica
                   type="password"
                   autoComplete="new-password"
                   required
-                  minLength={6}
+                  minLength={10}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   className="w-full h-11 rounded-xl border border-zinc-800 bg-black px-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus-accent transition"

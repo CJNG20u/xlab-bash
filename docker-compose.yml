@@ -1,8 +1,6 @@
 services:
   xlab-bash:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/cjng20u/xlab-bash:latest
     container_name: xlab-bash
     restart: unless-stopped
     ports:
@@ -10,11 +8,11 @@ services:
     env_file:
       - .env
     environment:
-      NODE_ENV: production
-      PORT: 8022
-      DATA_DIR: /data
-      TRUST_PROXY: 1
+      - NODE_ENV=production
+      - PORT=8022
+      - DATA_DIR=/data
     volumes:
+      # Saved hosts, snippets, keyboard layouts and generated secrets live here
       - ./data:/data
     security_opt:
       - no-new-privileges:true
