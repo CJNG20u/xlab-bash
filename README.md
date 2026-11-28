@@ -17,6 +17,7 @@ Self-hosted, mobile-first web SSH terminal & PWA with a pure-black full-screen t
 ```bash
 docker pull ghcr.io/cjng20u/xlab-bash:latest
 ```
+<img width="426" height="864" alt="image" src="https://github.com/user-attachments/assets/49a141a3-a192-4fef-8bb5-469a1958f79f" />
 
 ## Why xlab-bash?
 
