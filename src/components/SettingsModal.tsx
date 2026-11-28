@@ -421,6 +421,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className="w-5 h-5"
                   />
                 </label>
+
+                <label className="flex items-center justify-between gap-4 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-medium text-zinc-100">Show Snippets Above Keyboard</div>
+                    <div className="text-xs text-zinc-500">
+                      The row of snippet buttons (qm list, docker ps…). Turn off for more terminal space
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.showSnippets}
+                    onChange={(e) => onUpdateSettings({ showSnippets: e.target.checked })}
+                    className="w-5 h-5"
+                  />
+                </label>
               </div>
 
               {/* PWA & Session Account */}
@@ -450,6 +465,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {tab === 'snippets' && (
             <div className="space-y-5">
+              <div className="rounded-xl border border-zinc-800 bg-black p-4">
+                <label className="flex items-center justify-between gap-4 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-medium text-zinc-100">Show Snippets Above Keyboard</div>
+                    <div className="text-xs text-zinc-500">
+                      The row of snippet buttons (qm list, docker ps…). Turn off for more terminal space
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.showSnippets}
+                    onChange={(e) => onUpdateSettings({ showSnippets: e.target.checked })}
+                    className="w-5 h-5"
+                  />
+                </label>
+              </div>
               <form
                 onSubmit={handleSaveSnippet}
                 className="rounded-xl border border-zinc-800 bg-black p-4 space-y-3"

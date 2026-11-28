@@ -310,6 +310,8 @@ export function saveSettings(partial: Partial<AppSettings>): AppSettings {
       typeof partial.hapticEnabled === 'boolean' ? partial.hapticEnabled : current.hapticEnabled,
     showKeyPreview:
       typeof partial.showKeyPreview === 'boolean' ? partial.showKeyPreview : current.showKeyPreview,
+    showSnippets:
+      typeof partial.showSnippets === 'boolean' ? partial.showSnippets : current.showSnippets,
     activeLayoutId:
       typeof partial.activeLayoutId === 'string' && partial.activeLayoutId.trim()
         ? partial.activeLayoutId.trim()

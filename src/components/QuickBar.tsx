@@ -6,6 +6,7 @@ import type { QuickBarItem, SnippetItem } from '../types/index.ts';
 interface QuickBarProps {
   items: QuickBarItem[];
   snippets: SnippetItem[];
+  showSnippets: boolean;
   hapticEnabled: boolean;
   onSendSequence: (seq: string) => void;
   onOpenSnippetsSettings: () => void;
@@ -15,6 +16,7 @@ interface QuickBarProps {
 export const QuickBar: React.FC<QuickBarProps> = ({
   items,
   snippets,
+  showSnippets,
   hapticEnabled,
   onSendSequence,
   onOpenSnippetsSettings,
@@ -80,7 +82,8 @@ export const QuickBar: React.FC<QuickBarProps> = ({
         })}
       </div>
 
-      {/* Row 2: Swipeable user-defined snippets */}
+      {/* Row 2: Swipeable user-defined snippets (can be turned off in Settings) */}
+      {showSnippets && (
       <div className="flex items-center gap-1.5 px-1.5 py-1 overflow-x-auto no-scrollbar">
         {snippets.map((snippet) => (
           <button
@@ -108,6 +111,7 @@ export const QuickBar: React.FC<QuickBarProps> = ({
           <span>Edit</span>
         </button>
       </div>
+      )}
     </div>
   );
 };

@@ -95,6 +95,8 @@ export interface AppSettings {
   keyboardMode: KeyboardMode;
   hapticEnabled: boolean;
   showKeyPreview: boolean;
+  /** Show the snippet buttons row above the keyboard */
+  showSnippets: boolean;
   activeLayoutId: string;
   quickBarItems: QuickBarItem[];
 }

@@ -645,6 +645,7 @@ export default function App() {
           <QuickBar
             items={settings.quickBarItems}
             snippets={snippets}
+            showSnippets={settings.showSnippets}
             hapticEnabled={settings.hapticEnabled}
             onSendSequence={sendToActiveTerminal}
             onOpenSnippetsSettings={() => {

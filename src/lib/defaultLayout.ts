@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   keyboardMode: 'dev',
   hapticEnabled: true,
   showKeyPreview: true,
+  showSnippets: true,
   activeLayoutId: 'default-pc-6row',
   quickBarItems: DEFAULT_QUICK_BAR_ITEMS,
 };
