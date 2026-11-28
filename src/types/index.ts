@@ -48,7 +48,8 @@ export type KeyKind =
   | 'fn_toggle'
   | 'special'
   | 'space'
-  | 'custom';
+  | 'custom'
+  | 'spacer'; // empty gap (half-key indent on the asdf row)
 
 export type ModifierType = 'ctrl' | 'alt' | 'shift';
 

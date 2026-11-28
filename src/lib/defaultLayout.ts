@@ -1,4 +1,4 @@
-import type { AppSettings, KeyboardLayoutData, QuickBarItem } from '../types/index.ts';
+import type { AppSettings, KeyDef, KeyboardLayoutData, KeyboardRow, QuickBarItem } from '../types/index.ts';
 
 export const DEFAULT_QUICK_BAR_ITEMS: QuickBarItem[] = [
   { id: 'qb-esc', label: 'Esc', sequence: '\x1b', category: 'combo' },
@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   terminalTheme: 'fish-vivid',
   accentTheme: 'spotify-green',
-  keyboardHeight: 288,
+  keyboardHeight: 330,
   keyboardMode: 'dev',
   hapticEnabled: true,
   showKeyPreview: true,
@@ -29,149 +29,195 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 /**
- * Primary 4-row mobile developer keyboard (numbers & symbols live in the dedicated `123` button).
+ * Big-key layout for phones (thumbs, not styluses).
+ *
+ * Row 1 is a fixed control row (Esc, Tab, Ctrl, Alt and the arrows) that stays the
+ * same on every page, so those keys are always in the same place. Letter rows hold
+ * only letters, like a phone keyboard, so every key is wide enough to hit.
+ * Numbers and symbols live on the 123 and #+= pages.
  */
+const CONTROL_ROW = (prefix: string): KeyboardRow => ({
+  id: `${prefix}-control`,
+  keys: [
+    { id: `${prefix}-esc`, label: 'Esc', code: 'Escape', kind: 'special' },
+    { id: `${prefix}-tab`, label: 'Tab', code: 'Tab', kind: 'special' },
+    { id: `${prefix}-ctrl`, label: 'Ctrl', code: 'ControlLeft', kind: 'modifier', modifier: 'ctrl', width: 1.15 },
+    { id: `${prefix}-alt`, label: 'Alt', code: 'AltLeft', kind: 'modifier', modifier: 'alt' },
+    { id: `${prefix}-left`, label: '←', code: 'ArrowLeft', kind: 'special', repeatable: true },
+    { id: `${prefix}-up`, label: '↑', code: 'ArrowUp', kind: 'special', repeatable: true },
+    { id: `${prefix}-down`, label: '↓', code: 'ArrowDown', kind: 'special', repeatable: true },
+    { id: `${prefix}-right`, label: '→', code: 'ArrowRight', kind: 'special', repeatable: true },
+  ],
+});
+
+const sym = (id: string, label: string, code: string): KeyDef => ({ id, label, code, kind: 'char' });
+
 export const DEFAULT_PC_6ROW_LAYOUT: KeyboardLayoutData = {
   rows: [
+    CONTROL_ROW('k'),
     {
       id: 'row-qwerty',
       keys: [
-        { id: 'k-tab', label: 'Tab', code: 'Tab', kind: 'special', width: 1.25 },
-        { id: 'k-q', label: 'q', shiftLabel: 'Q', code: 'KeyQ', kind: 'char' },
-        { id: 'k-w', label: 'w', shiftLabel: 'W', code: 'KeyW', kind: 'char' },
-        { id: 'k-e', label: 'e', shiftLabel: 'E', code: 'KeyE', kind: 'char' },
-        { id: 'k-r', label: 'r', shiftLabel: 'R', code: 'KeyR', kind: 'char' },
-        { id: 'k-t', label: 't', shiftLabel: 'T', code: 'KeyT', kind: 'char' },
-        { id: 'k-y', label: 'y', shiftLabel: 'Y', code: 'KeyY', kind: 'char' },
-        { id: 'k-u', label: 'u', shiftLabel: 'U', code: 'KeyU', kind: 'char' },
-        { id: 'k-i', label: 'i', shiftLabel: 'I', code: 'KeyI', kind: 'char' },
-        { id: 'k-o', label: 'o', shiftLabel: 'O', code: 'KeyO', kind: 'char' },
-        { id: 'k-p', label: 'p', shiftLabel: 'P', code: 'KeyP', kind: 'char' },
-        { id: 'k-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.4, repeatable: true },
+      { id: 'k-q', label: 'q', shiftLabel: 'Q', code: 'KeyQ', kind: 'char' },
+      { id: 'k-w', label: 'w', shiftLabel: 'W', code: 'KeyW', kind: 'char' },
+      { id: 'k-e', label: 'e', shiftLabel: 'E', code: 'KeyE', kind: 'char' },
+      { id: 'k-r', label: 'r', shiftLabel: 'R', code: 'KeyR', kind: 'char' },
+      { id: 'k-t', label: 't', shiftLabel: 'T', code: 'KeyT', kind: 'char' },
+      { id: 'k-y', label: 'y', shiftLabel: 'Y', code: 'KeyY', kind: 'char' },
+      { id: 'k-u', label: 'u', shiftLabel: 'U', code: 'KeyU', kind: 'char' },
+      { id: 'k-i', label: 'i', shiftLabel: 'I', code: 'KeyI', kind: 'char' },
+      { id: 'k-o', label: 'o', shiftLabel: 'O', code: 'KeyO', kind: 'char' },
+      { id: 'k-p', label: 'p', shiftLabel: 'P', code: 'KeyP', kind: 'char' },
       ],
     },
     {
       id: 'row-asdf',
       keys: [
-        { id: 'k-ctrl', label: 'Ctrl', code: 'ControlLeft', kind: 'modifier', modifier: 'ctrl', width: 1.45 },
-        { id: 'k-a', label: 'a', shiftLabel: 'A', code: 'KeyA', kind: 'char' },
-        { id: 'k-s', label: 's', shiftLabel: 'S', code: 'KeyS', kind: 'char' },
-        { id: 'k-d', label: 'd', shiftLabel: 'D', code: 'KeyD', kind: 'char' },
-        { id: 'k-f', label: 'f', shiftLabel: 'F', code: 'KeyF', kind: 'char' },
-        { id: 'k-g', label: 'g', shiftLabel: 'G', code: 'KeyG', kind: 'char' },
-        { id: 'k-h', label: 'h', shiftLabel: 'H', code: 'KeyH', kind: 'char' },
-        { id: 'k-j', label: 'j', shiftLabel: 'J', code: 'KeyJ', kind: 'char' },
-        { id: 'k-k', label: 'k', shiftLabel: 'K', code: 'KeyK', kind: 'char' },
-        { id: 'k-l', label: 'l', shiftLabel: 'L', code: 'KeyL', kind: 'char' },
-        { id: 'k-enter', label: '↵', code: 'Enter', kind: 'special', width: 1.65 },
+        { id: 'k-pad-l', label: '', code: 'Spacer', kind: 'spacer', width: 0.5 },
+      { id: 'k-a', label: 'a', shiftLabel: 'A', code: 'KeyA', kind: 'char' },
+      { id: 'k-s', label: 's', shiftLabel: 'S', code: 'KeyS', kind: 'char' },
+      { id: 'k-d', label: 'd', shiftLabel: 'D', code: 'KeyD', kind: 'char' },
+      { id: 'k-f', label: 'f', shiftLabel: 'F', code: 'KeyF', kind: 'char' },
+      { id: 'k-g', label: 'g', shiftLabel: 'G', code: 'KeyG', kind: 'char' },
+      { id: 'k-h', label: 'h', shiftLabel: 'H', code: 'KeyH', kind: 'char' },
+      { id: 'k-j', label: 'j', shiftLabel: 'J', code: 'KeyJ', kind: 'char' },
+      { id: 'k-k', label: 'k', shiftLabel: 'K', code: 'KeyK', kind: 'char' },
+      { id: 'k-l', label: 'l', shiftLabel: 'L', code: 'KeyL', kind: 'char' },
+        { id: 'k-pad-r', label: '', code: 'Spacer', kind: 'spacer', width: 0.5 },
       ],
     },
     {
       id: 'row-zxcv',
       keys: [
-        { id: 'k-shift-l', label: '⇧', code: 'ShiftLeft', kind: 'modifier', modifier: 'shift', width: 1.4 },
-        { id: 'k-z', label: 'z', shiftLabel: 'Z', code: 'KeyZ', kind: 'char' },
-        { id: 'k-x', label: 'x', shiftLabel: 'X', code: 'KeyX', kind: 'char' },
-        { id: 'k-c', label: 'c', shiftLabel: 'C', code: 'KeyC', kind: 'char' },
-        { id: 'k-v', label: 'v', shiftLabel: 'V', code: 'KeyV', kind: 'char' },
-        { id: 'k-b', label: 'b', shiftLabel: 'B', code: 'KeyB', kind: 'char' },
-        { id: 'k-n', label: 'n', shiftLabel: 'N', code: 'KeyN', kind: 'char' },
-        { id: 'k-m', label: 'm', shiftLabel: 'M', code: 'KeyM', kind: 'char' },
-        { id: 'k-comma', label: ',', shiftLabel: '<', code: 'Comma', kind: 'char' },
-        { id: 'k-dot', label: '.', shiftLabel: '>', code: 'Period', kind: 'char' },
-        { id: 'k-slash', label: '/', shiftLabel: '?', code: 'Slash', kind: 'char' },
-        { id: 'k-up', label: '↑', code: 'ArrowUp', kind: 'special', repeatable: true },
-        { id: 'k-shift-r', label: '⇧', code: 'ShiftRight', kind: 'modifier', modifier: 'shift', width: 1.25 },
+        { id: 'k-shift', label: '⇧', code: 'ShiftLeft', kind: 'modifier', modifier: 'shift', width: 1.5 },
+      { id: 'k-z', label: 'z', shiftLabel: 'Z', code: 'KeyZ', kind: 'char' },
+      { id: 'k-x', label: 'x', shiftLabel: 'X', code: 'KeyX', kind: 'char' },
+      { id: 'k-c', label: 'c', shiftLabel: 'C', code: 'KeyC', kind: 'char' },
+      { id: 'k-v', label: 'v', shiftLabel: 'V', code: 'KeyV', kind: 'char' },
+      { id: 'k-b', label: 'b', shiftLabel: 'B', code: 'KeyB', kind: 'char' },
+      { id: 'k-n', label: 'n', shiftLabel: 'N', code: 'KeyN', kind: 'char' },
+      { id: 'k-m', label: 'm', shiftLabel: 'M', code: 'KeyM', kind: 'char' },
+        { id: 'k-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
       ],
     },
     {
       id: 'row-bottom',
       keys: [
-        { id: 'k-num-toggle', label: '123', code: 'FnToggle', kind: 'fn_toggle', width: 1.45 },
-        { id: 'k-alt', label: 'Alt', code: 'AltLeft', kind: 'modifier', modifier: 'alt', width: 1.15 },
-        { id: 'k-space', label: 'Space', code: 'Space', kind: 'space', width: 3.3, repeatable: true },
-        { id: 'k-home', label: 'Home', code: 'Home', kind: 'special', width: 1.1 },
-        { id: 'k-end', label: 'End', code: 'End', kind: 'special', width: 1.05 },
-        { id: 'k-left', label: '←', code: 'ArrowLeft', kind: 'special', repeatable: true },
-        { id: 'k-down', label: '↓', code: 'ArrowDown', kind: 'special', repeatable: true },
-        { id: 'k-right', label: '→', code: 'ArrowRight', kind: 'special', repeatable: true },
-        { id: 'k-pgup', label: 'PgU', code: 'PageUp', kind: 'special', width: 1.05 },
-        { id: 'k-pgdn', label: 'PgD', code: 'PageDown', kind: 'special', width: 1.05 },
+        { id: 'k-num-toggle', label: '123', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
+        { id: 'k-slash', label: '/', shiftLabel: '?', code: 'Slash', kind: 'char' },
+        { id: 'k-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
+        { id: 'k-dot', label: '.', shiftLabel: '>', code: 'Period', kind: 'char' },
+        { id: 'k-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
       ],
     },
   ],
 };
 
-/**
- * Dedicated Numbers & Symbols layer toggled via the `123` / `ABC` button.
- */
+/** 123 page: digits and the symbols used most in a shell. */
 export const NUMBERS_LAYER_LAYOUT: KeyboardLayoutData = {
   rows: [
+    CONTROL_ROW('n'),
     {
-      id: 'num-row-1',
-      keys: [
-        { id: 'n-1', label: '1', shiftLabel: '!', code: 'Digit1', kind: 'char' },
-        { id: 'n-2', label: '2', shiftLabel: '@', code: 'Digit2', kind: 'char' },
-        { id: 'n-3', label: '3', shiftLabel: '#', code: 'Digit3', kind: 'char' },
-        { id: 'n-4', label: '4', shiftLabel: '$', code: 'Digit4', kind: 'char' },
-        { id: 'n-5', label: '5', shiftLabel: '%', code: 'Digit5', kind: 'char' },
-        { id: 'n-6', label: '6', shiftLabel: '^', code: 'Digit6', kind: 'char' },
-        { id: 'n-7', label: '7', shiftLabel: '&', code: 'Digit7', kind: 'char' },
-        { id: 'n-8', label: '8', shiftLabel: '*', code: 'Digit8', kind: 'char' },
-        { id: 'n-9', label: '9', shiftLabel: '(', code: 'Digit9', kind: 'char' },
-        { id: 'n-0', label: '0', shiftLabel: ')', code: 'Digit0', kind: 'char' },
-        { id: 'n-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.45, repeatable: true },
-      ],
+      id: 'num-digits',
+      keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map((d) =>
+        sym(`n-${d}`, d, `Digit${d}`)
+      ),
     },
     {
-      id: 'num-row-2',
+      id: 'num-common',
       keys: [
-        { id: 'n-bang', label: '!', code: 'Exclam', kind: 'char' },
-        { id: 'n-at', label: '@', code: 'At', kind: 'char' },
-        { id: 'n-hash', label: '#', code: 'Hash', kind: 'char' },
-        { id: 'n-dollar', label: '$', code: 'Dollar', kind: 'char' },
-        { id: 'n-pct', label: '%', code: 'Percent', kind: 'char' },
-        { id: 'n-caret', label: '^', code: 'Caret', kind: 'char' },
-        { id: 'n-amp', label: '&', code: 'Amp', kind: 'char' },
-        { id: 'n-star', label: '*', code: 'Star', kind: 'char' },
-        { id: 'n-lparen', label: '(', code: 'LParen', kind: 'char' },
-        { id: 'n-rparen', label: ')', code: 'RParen', kind: 'char' },
-        { id: 'n-minus', label: '-', shiftLabel: '_', code: 'Minus', kind: 'char' },
-        { id: 'n-enter', label: '↵', code: 'Enter', kind: 'special', width: 1.45 },
+        sym('n-minus', '-', 'Minus'),
+        sym('n-slash', '/', 'Slash'),
+        sym('n-colon', ':', 'Colon'),
+        sym('n-semi', ';', 'Semicolon'),
+        sym('n-lparen', '(', 'LParen'),
+        sym('n-rparen', ')', 'RParen'),
+        sym('n-dollar', '$', 'Dollar'),
+        sym('n-amp', '&', 'Amp'),
+        sym('n-pipe', '|', 'Pipe'),
+        sym('n-dquote', '"', 'DoubleQuote'),
       ],
     },
     {
       id: 'num-row-3',
       keys: [
-        { id: 'n-grave', label: '`', code: 'Backquote', kind: 'char' },
-        { id: 'n-tilde', label: '~', code: 'Tilde', kind: 'char' },
-        { id: 'n-under', label: '_', code: 'Underscore', kind: 'char' },
-        { id: 'n-eq', label: '=', code: 'Equal', kind: 'char' },
-        { id: 'n-plus', label: '+', code: 'Plus', kind: 'char' },
-        { id: 'n-lbr', label: '[', code: 'BracketLeft', kind: 'char' },
-        { id: 'n-rbr', label: ']', code: 'BracketRight', kind: 'char' },
-        { id: 'n-lbrace', label: '{', code: 'BraceLeft', kind: 'char' },
-        { id: 'n-rbrace', label: '}', code: 'BraceRight', kind: 'char' },
-        { id: 'n-bslash', label: '\\', code: 'Backslash', kind: 'char' },
-        { id: 'n-pipe', label: '|', code: 'Pipe', kind: 'char' },
-        { id: 'n-colon', label: ':', code: 'Colon', kind: 'char' },
-        { id: 'n-dquote', label: '"', code: 'DoubleQuote', kind: 'char' },
+        { id: 'n-page2', label: '#+=', code: 'FnPage2', kind: 'fn_toggle', width: 1.5 },
+        sym('n-comma', ',', 'Comma'),
+        sym('n-dot', '.', 'Period'),
+        sym('n-qmark', '?', 'Question'),
+        sym('n-bang', '!', 'Exclam'),
+        sym('n-quote', "'", 'Quote'),
+        sym('n-star', '*', 'Star'),
+        sym('n-tilde', '~', 'Tilde'),
+        { id: 'n-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
       ],
     },
     {
-      id: 'num-row-4',
+      id: 'num-bottom',
       keys: [
-        { id: 'n-abc-toggle', label: 'ABC', code: 'FnToggle', kind: 'fn_toggle', width: 1.45 },
-        { id: 'n-ctrl', label: 'Ctrl', code: 'ControlLeft', kind: 'modifier', modifier: 'ctrl', width: 1.2 },
-        { id: 'n-semi', label: ';', code: 'Semicolon', kind: 'char' },
-        { id: 'n-quote', label: "'", code: 'Quote', kind: 'char' },
-        { id: 'n-lt', label: '<', code: 'Less', kind: 'char' },
-        { id: 'n-gt', label: '>', code: 'Greater', kind: 'char' },
-        { id: 'n-qmark', label: '?', code: 'Question', kind: 'char' },
-        { id: 'n-space', label: 'Space', code: 'Space', kind: 'space', width: 2.3, repeatable: true },
-        { id: 'n-left', label: '←', code: 'ArrowLeft', kind: 'special', repeatable: true },
-        { id: 'n-down', label: '↓', code: 'ArrowDown', kind: 'special', repeatable: true },
-        { id: 'n-right', label: '→', code: 'ArrowRight', kind: 'special', repeatable: true },
+        { id: 'n-abc', label: 'ABC', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
+        sym('n-under', '_', 'Underscore'),
+        { id: 'n-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
+        sym('n-eq', '=', 'Equal'),
+        { id: 'n-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
+      ],
+    },
+  ],
+};
+
+/** #+= page: brackets and rarer symbols, plus Home / End / PgUp / PgDn. */
+export const SYMBOLS_LAYER_LAYOUT: KeyboardLayoutData = {
+  rows: [
+    CONTROL_ROW('s'),
+    {
+      id: 'sym-brackets',
+      keys: [
+        sym('s-lbr', '[', 'BracketLeft'),
+        sym('s-rbr', ']', 'BracketRight'),
+        sym('s-lbrace', '{', 'BraceLeft'),
+        sym('s-rbrace', '}', 'BraceRight'),
+        sym('s-hash', '#', 'Hash'),
+        sym('s-pct', '%', 'Percent'),
+        sym('s-caret', '^', 'Caret'),
+        sym('s-plus', '+', 'Plus'),
+        sym('s-lt', '<', 'Less'),
+        sym('s-gt', '>', 'Greater'),
+      ],
+    },
+    {
+      id: 'sym-misc',
+      keys: [
+        sym('s-bslash', '\\', 'Backslash'),
+        sym('s-grave', '`', 'Backquote'),
+        sym('s-at', '@', 'At'),
+        sym('s-under', '_', 'Underscore'),
+        sym('s-eq', '=', 'Equal'),
+        sym('s-pipe', '|', 'Pipe'),
+        sym('s-amp', '&', 'Amp'),
+        sym('s-dollar', '$', 'Dollar'),
+        sym('s-dquote', '"', 'DoubleQuote'),
+        sym('s-quote', "'", 'Quote'),
+      ],
+    },
+    {
+      id: 'sym-nav',
+      keys: [
+        { id: 's-page1', label: '123', code: 'FnPage1', kind: 'fn_toggle', width: 1.5 },
+        { id: 's-home', label: 'Home', code: 'Home', kind: 'special', width: 1.25 },
+        { id: 's-end', label: 'End', code: 'End', kind: 'special', width: 1.25 },
+        { id: 's-pgup', label: 'PgUp', code: 'PageUp', kind: 'special', width: 1.25, repeatable: true },
+        { id: 's-pgdn', label: 'PgDn', code: 'PageDown', kind: 'special', width: 1.25, repeatable: true },
+        { id: 's-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
+      ],
+    },
+    {
+      id: 'sym-bottom',
+      keys: [
+        { id: 's-abc', label: 'ABC', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
+        sym('s-minus', '-', 'Minus'),
+        { id: 's-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
+        sym('s-colon', ':', 'Colon'),
+        { id: 's-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
       ],
     },
   ],

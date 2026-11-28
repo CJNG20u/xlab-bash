@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { NUMBERS_LAYER_LAYOUT } from '../lib/defaultLayout.ts';
+import { NUMBERS_LAYER_LAYOUT, SYMBOLS_LAYER_LAYOUT } from '../lib/defaultLayout.ts';
 import { resolveKeySequence, type ActiveModifiers } from '../lib/keySequences.ts';
 import type { KeyDef, KeyboardLayoutData, ModifierType } from '../types/index.ts';
 
@@ -40,7 +40,9 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
   onSendSequence,
 }) => {
   const [mods, setMods] = useState<ModifierMap>({ ctrl: 'off', alt: 'off', shift: 'off' });
-  const [fnActive, setFnActive] = useState(false);
+  // 0 = letters (your layout), 1 = 123 page, 2 = #+= page
+  const [page, setPage] = useState<0 | 1 | 2>(0);
+  const fnActive = page !== 0;
   const [pressedKeyId, setPressedKeyId] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewBubble | null>(null);
   const [spaceScrubbing, setSpaceScrubbing] = useState(false);
@@ -164,7 +166,7 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
   const getKeyDisplayLabel = (key: KeyDef): { primary: string; secondary?: string } => {
     const isShift = mods.shift !== 'off';
     if (key.kind === 'fn_toggle') {
-      return { primary: fnActive ? 'ABC' : key.label || '123' };
+      return { primary: key.label || (fnActive ? 'ABC' : '123') };
     }
     if (isShift && key.shiftLabel) {
       return { primary: key.shiftLabel, secondary: key.label };
@@ -194,9 +196,12 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
 
     if (key.kind === 'fn_toggle') {
       vibrate(12);
-      setFnActive((v) => !v);
+      if (key.code === 'FnPage2') setPage(2);
+      else if (key.code === 'FnPage1') setPage(1);
+      else setPage((p) => (p === 0 ? 1 : 0)); // 123 <-> ABC
       return;
     }
+    if (key.kind === 'spacer') return;
 
     setPressedKeyId(key.id);
     vibrate(10);
@@ -310,12 +315,13 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
     setPreview(null);
   };
 
-  const displayedLayout = fnActive ? NUMBERS_LAYER_LAYOUT : layout;
+  const displayedLayout =
+    page === 2 ? SYMBOLS_LAYER_LAYOUT : page === 1 ? NUMBERS_LAYER_LAYOUT : layout;
   const rowCount = displayedLayout.rows.length || 4;
 
   return (
     <div
-      className="relative w-full bg-[#09090b] border-t border-zinc-800/90 px-1.5 pt-1.5 pb-2 pb-safe select-none shrink-0"
+      className="relative w-full bg-[#09090b] border-t border-zinc-800/90 px-1 pt-2 pb-2 pb-safe select-none shrink-0"
       style={{ height: `${effectiveHeight}px` }}
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -336,7 +342,7 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
       )}
 
       <div
-        className="h-full w-full grid gap-[4px]"
+        className="h-full w-full grid gap-y-[7px]"
         style={{ gridTemplateRows: `repeat(${rowCount}, minmax(0, 1fr))` }}
       >
         {displayedLayout.rows.map((row, rowIdx) => {
@@ -344,11 +350,22 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
           return (
             <div
               key={row.id || `row-${rowIdx}`}
-              className={`flex items-stretch gap-[4px] min-h-0 ${
+              className={`flex items-stretch gap-x-[5px] min-h-0 ${
                 isFnRow ? 'overflow-x-auto no-scrollbar' : 'w-full'
               }`}
             >
               {row.keys.map((key) => {
+                if (key.kind === 'spacer') {
+                  return (
+                    <div
+                      key={key.id}
+                      aria-hidden="true"
+                      style={{ flex: `${key.width ?? 0.5} 1 0%`, minWidth: 0 }}
+                    />
+                  );
+                }
+                const isControlRow = rowIdx === 0 && row.id.endsWith('-control');
+                const isArrow = key.code.startsWith('Arrow');
                 const isMod = key.kind === 'modifier' && key.modifier;
                 const modState: ModState = isMod && key.modifier ? mods[key.modifier] : 'off';
                 const isFnToggle = key.kind === 'fn_toggle';
@@ -362,6 +379,9 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
                 if (key.kind === 'special' || key.kind === 'custom') {
                   colorClass =
                     'bg-[#111114] text-zinc-300 border-zinc-800/80 active:bg-zinc-700';
+                }
+                if (isControlRow && isArrow) {
+                  colorClass = 'bg-[#111114] text-accent border-zinc-800/80 active:bg-zinc-700';
                 }
 
                 if (key.code === 'Enter') {
@@ -379,11 +399,8 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
                 }
 
                 if (isFnToggle) {
-                  colorClass = fnActive
-                    ? 'bg-accent-solid font-semibold'
-                    : 'bg-[#111114] text-accent border-zinc-800/90 font-semibold';
+                  colorClass = 'bg-[#111114] text-accent border-zinc-800/90 font-semibold active:bg-zinc-700';
                 }
-
                 if (isSpace && spaceScrubbing) {
                   colorClass = 'btn-accent-soft';
                 } else if (isPressed && !isMod && !isFnToggle) {
@@ -417,7 +434,7 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
                     onPointerUp={(e) => handleKeyPointerUp(e, key)}
                     onPointerCancel={handleKeyPointerCancel}
                     onPointerLeave={isSpace ? undefined : handleKeyPointerCancel}
-                    className={`dev-key relative rounded-[6px] border flex items-center justify-center leading-none transition-[background-color,border-color,color] duration-75 ${colorClass}`}
+                    className={`dev-key relative rounded-[8px] border flex items-center justify-center leading-none transition-[background-color,border-color,color] duration-75 ${colorClass}`}
                   >
                     {/* Subtle secondary shifted legend on dual-symbol keys */}
                     {!fnActive &&
@@ -433,10 +450,12 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
                     <span
                       className={`font-mono-term truncate px-0.5 ${
                         isSpace
-                          ? 'text-[11px] tracking-wide text-zinc-400'
+                          ? 'text-[13px] tracking-wide text-zinc-400'
+                          : isArrow || key.code === 'Enter' || key.code === 'Backspace' || key.label === '⇧'
+                          ? 'text-[22px] font-semibold'
                           : isSmallText
-                          ? 'text-[11px] sm:text-[12px] font-medium'
-                          : 'text-[15px] sm:text-[16px] font-medium'
+                          ? 'text-[14px] font-semibold'
+                          : 'text-[21px] font-medium'
                       }`}
                     >
                       {isSpace ? (spaceScrubbing ? '← cursor →' : 'space') : primary}

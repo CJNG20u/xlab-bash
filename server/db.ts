@@ -93,7 +93,7 @@ function seedDefaults() {
         'INSERT INTO keyboard_layouts (id, name, layout_json, is_default, updated_at) VALUES (?, ?, ?, ?, ?)'
       ).run(
         'default-pc-6row',
-        'xlab-bash 5-Row Developer',
+        'xlab-bash Big Keys',
         JSON.stringify(DEFAULT_PC_6ROW_LAYOUT),
         1,
         Date.now()
@@ -165,6 +165,39 @@ function seedDefaults() {
     );
     db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)').run(
       'migration_xlab_v3_num_button',
+      '1'
+    );
+  }
+
+  // One-time migration: big-key layout (control row + letters-only rows) and a taller keyboard
+  const migratedV4 = db
+    .prepare('SELECT value FROM app_config WHERE key = ?')
+    .get('migration_xlab_v4_big_keys');
+  if (!migratedV4) {
+    db.prepare(
+      'UPDATE keyboard_layouts SET name = ?, layout_json = ?, updated_at = ? WHERE id = ?'
+    ).run('xlab-bash Big Keys', JSON.stringify(DEFAULT_PC_6ROW_LAYOUT), Date.now(), 'default-pc-6row');
+
+    const raw = db.prepare('SELECT value FROM app_config WHERE key = ?').get('app_settings') as
+      | { value: string }
+      | undefined;
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw.value) as Partial<AppSettings>;
+        if (!parsed.keyboardHeight || parsed.keyboardHeight < DEFAULT_SETTINGS.keyboardHeight) {
+          parsed.keyboardHeight = DEFAULT_SETTINGS.keyboardHeight;
+          db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)').run(
+            'app_settings',
+            JSON.stringify(parsed)
+          );
+        }
+      } catch {
+        // ignore malformed json
+      }
+    }
+
+    db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)').run(
+      'migration_xlab_v4_big_keys',
       '1'
     );
   }

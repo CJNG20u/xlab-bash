@@ -380,7 +380,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <input
                   type="range"
                   min={200}
-                  max={380}
+                  max={400}
                   step={4}
                   value={settings.keyboardHeight}
                   onChange={(e) =>
