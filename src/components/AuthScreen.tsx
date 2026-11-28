@@ -6,10 +6,12 @@ import { PWAInstallButton } from './PWAInstallButton.tsx';
 
 interface AuthScreenProps {
   authStatus: AuthStatus;
+  /** Why the previous login ended (shown above the form) */
+  notice?: string | null;
   onAuthenticated: (status: AuthStatus) => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ authStatus, onAuthenticated }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ authStatus, notice, onAuthenticated }) => {
   const isSetup = authStatus.needsSetup;
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
@@ -144,6 +146,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authStatus, onAuthentica
                   className="w-full h-11 rounded-xl border border-zinc-800 bg-black px-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus-accent transition"
                   placeholder="Re-enter password"
                 />
+              </div>
+            )}
+
+            {notice && !error && !isSetup && (
+              <div
+                role="status"
+                className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-950/20 px-3.5 py-2.5 text-xs text-amber-200"
+              >
+                <Lock className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                <span>
+                  {notice} Your terminals keep running and reconnect after you sign in.
+                </span>
               </div>
             )}
 

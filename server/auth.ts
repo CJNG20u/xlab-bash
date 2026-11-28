@@ -137,17 +137,39 @@ export function signSessionToken(username: string): string {
   });
 }
 
-export function verifySessionToken(token: string | undefined | null): string | null {
-  if (!token) return null;
+export type TokenRejectReason = 'expired' | 'revoked' | 'invalid';
+
+interface TokenCheck {
+  username: string | null;
+  reason?: TokenRejectReason;
+  issuedAt?: number; // seconds since epoch
+}
+
+function checkSessionToken(token: string): TokenCheck {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as SessionPayload;
-    if (typeof decoded.sub !== 'string') return null;
-    if ((decoded.ep ?? 0) !== getSessionEpoch()) return null; // revoked
-    return decoded.sub;
-  } catch {
-    return null;
+    if (typeof decoded.sub !== 'string') return { username: null, reason: 'invalid' };
+    if ((decoded.ep ?? 0) !== getSessionEpoch()) return { username: null, reason: 'revoked' };
+    return { username: decoded.sub, issuedAt: decoded.iat };
+  } catch (err) {
+    const name = (err as Error).name;
+    return { username: null, reason: name === 'TokenExpiredError' ? 'expired' : 'invalid' };
   }
 }
+
+export function verifySessionToken(token: string | undefined | null): string | null {
+  if (!token) return null;
+  return checkSessionToken(token).username;
+}
+
+const REJECT_MESSAGES: Record<TokenRejectReason, string> = {
+  expired: 'Your login expired. Sign in again.',
+  revoked: 'You were signed out (password changed or "sign out everywhere"). Sign in again.',
+  invalid: 'Your login is no longer valid (server key changed). Sign in again.',
+};
+
+// Sessions slide: a login used at least once a day never expires while you use it
+const RENEW_AFTER_SECONDS = 60 * 60 * 24;
 
 // Secure only when the browser actually reached us over HTTPS (directly or via a
 // trusted proxy). A Secure cookie on plain http://<lan-ip>:8022 is silently dropped,
@@ -176,25 +198,31 @@ export function clearSessionCookie(res: Response): void {
 export function extractAuthFromRequest(req: Request): {
   username: string | null;
   viaCookieOnly: boolean;
+  /** Why a presented token was refused (no token at all leaves this empty) */
+  reason?: TokenRejectReason;
+  issuedAt?: number;
 } {
+  let reason: TokenRejectReason | undefined;
+
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    const username = verifySessionToken(token);
-    if (username) {
-      return { username, viaCookieOnly: false };
+    const check = checkSessionToken(authHeader.slice(7).trim());
+    if (check.username) {
+      return { username: check.username, viaCookieOnly: false, issuedAt: check.issuedAt };
     }
+    reason = check.reason;
   }
 
   const cookieToken = req.cookies?.[SESSION_COOKIE_NAME];
   if (cookieToken) {
-    const username = verifySessionToken(cookieToken);
-    if (username) {
-      return { username, viaCookieOnly: true };
+    const check = checkSessionToken(cookieToken);
+    if (check.username) {
+      return { username: check.username, viaCookieOnly: true, issuedAt: check.issuedAt };
     }
+    reason = check.reason ?? reason;
   }
 
-  return { username: null, viaCookieOnly: false };
+  return { username: null, viaCookieOnly: false, reason };
 }
 
 export function parseCookieHeader(cookieHeader: string | undefined): Record<string, string> {
@@ -215,9 +243,11 @@ export function parseCookieHeader(cookieHeader: string | undefined): Record<stri
 }
 
 export function getAuthStatusForRequest(req: Request) {
-  const { username } = extractAuthFromRequest(req);
+  const { username, reason } = extractAuthFromRequest(req);
   return {
     authenticated: Boolean(username),
+    // Shown on the sign-in screen when an old login was refused
+    signedOutReason: !username && reason ? REJECT_MESSAGES[reason] : undefined,
     needsSetup: needsFirstRunSetup(),
     username: username || undefined,
     encryptionKeyConfigured: isEncryptionKeyConfigured(),
@@ -226,9 +256,15 @@ export function getAuthStatusForRequest(req: Request) {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const { username, viaCookieOnly } = extractAuthFromRequest(req);
+  const { username, viaCookieOnly, reason, issuedAt } = extractAuthFromRequest(req);
   if (!username) {
-    res.status(401).json({ error: 'Authentication required' });
+    if (reason) {
+      console.warn(`[auth] Rejected ${req.method} ${req.path} from ${req.ip}: session ${reason}`);
+    }
+    res.status(401).json({
+      error: reason ? REJECT_MESSAGES[reason] : 'Sign in required.',
+      code: reason ? `session_${reason}` : 'signed_out',
+    });
     return;
   }
 
@@ -250,6 +286,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       res.status(403).json({ error: 'Cross-site request blocked' });
       return;
     }
+  }
+
+  // Renew a login that's more than a day old, so it never runs out while in use
+  if (issuedAt && Date.now() / 1000 - issuedAt > RENEW_AFTER_SECONDS) {
+    const fresh = signSessionToken(username);
+    setSessionCookie(res, fresh);
+    res.setHeader('X-Session-Token', fresh);
   }
 
   (req as Request & { authUser?: string }).authUser = username;

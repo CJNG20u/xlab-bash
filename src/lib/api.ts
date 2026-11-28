@@ -21,6 +21,23 @@ export function getMemoryToken(): string | null {
   return memoryToken;
 }
 
+// Called when the server says this browser's login is no longer valid
+let unauthorizedHandler: ((message: string) => void) | null = null;
+let signedOut = false;
+
+export function onUnauthorized(handler: (message: string) => void): void {
+  unauthorizedHandler = handler;
+}
+
+/** True between losing the login and signing in again (terminals keep shells alive). */
+export function isSignedOut(): boolean {
+  return signedOut;
+}
+
+export function markSignedIn(): void {
+  signedOut = false;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -45,8 +62,23 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   });
 
+  // Login renewed by the server (sliding session)
+  const refreshed = res.headers.get('X-Session-Token');
+  if (refreshed && memoryToken) memoryToken = refreshed;
+
   const contentType = res.headers.get('content-type') || '';
   const data = contentType.includes('application/json') ? await res.json() : null;
+
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    const message =
+      (data && typeof data.error === 'string' ? data.error : null) || 'Sign in again to continue.';
+    if (!signedOut) {
+      signedOut = true;
+      memoryToken = null;
+      unauthorizedHandler?.(message);
+    }
+    throw new ApiError(message, 401);
+  }
 
   if (!res.ok) {
     const message =
@@ -59,6 +91,9 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  onUnauthorized,
+  isSignedOut,
+  markSignedIn,
   getAuthStatus: () => request<AuthStatus>('/api/auth/status'),
 
   setupAdmin: async (username: string, password: string) => {

@@ -111,6 +111,8 @@ export default function App() {
 
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [tabsRestored, setTabsRestored] = useState(false);
+  // Message for the sign-in screen when the login ran out while the app was open
+  const [signedOutNotice, setSignedOutNotice] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'hosts' | string>('hosts');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('display');
@@ -179,7 +181,42 @@ export default function App() {
     if (tabsRestored && authStatus.authenticated) saveStoredTabs(sessions);
   }, [sessions, tabsRestored, authStatus.authenticated]);
 
+  // The server refused this browser's login (expired / revoked): go to the sign-in
+  // screen right away. Terminals unmount without ending their shells, which keep
+  // running on the server and re-attach after you sign in again.
+  useEffect(() => {
+    api.onUnauthorized((message) => {
+      setSignedOutNotice(message);
+      setSettingsOpen(false);
+      setAuthStatus((prev) => ({ ...prev, authenticated: false, username: undefined }));
+    });
+  }, []);
+
+  // Coming back to the app after a while: check the login is still good
+  useEffect(() => {
+    if (!authStatus.authenticated) return;
+    const recheck = () => {
+      if (document.visibilityState !== 'visible') return;
+      api
+        .getAuthStatus()
+        .then((status) => {
+          if (!status.authenticated && !api.isSignedOut()) {
+            setSignedOutNotice(status.signedOutReason || 'Sign in again to continue.');
+            setSettingsOpen(false);
+            setAuthStatus(status);
+          }
+        })
+        .catch(() => {
+          // offline: the terminals show their own reconnect state
+        });
+    };
+    document.addEventListener('visibilitychange', recheck);
+    return () => document.removeEventListener('visibilitychange', recheck);
+  }, [authStatus.authenticated]);
+
   const handleAuthenticated = (status: AuthStatus) => {
+    api.markSignedIn();
+    setSignedOutNotice(null);
     setAuthStatus(status);
     loadWorkspaceData();
     const restored = loadStoredTabs();
@@ -394,7 +431,11 @@ export default function App() {
     return (
       <>
         <OfflineIndicator />
-        <AuthScreen authStatus={authStatus} onAuthenticated={handleAuthenticated} />
+        <AuthScreen
+          authStatus={authStatus}
+          notice={signedOutNotice || authStatus.signedOutReason}
+          onAuthenticated={handleAuthenticated}
+        />
       </>
     );
   }

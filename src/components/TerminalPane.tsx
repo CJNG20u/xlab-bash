@@ -18,7 +18,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { api } from '../lib/api.ts';
+import { api, isSignedOut } from '../lib/api.ts';
 import { writeClipboard } from '../lib/clipboard.ts';
 import { getTerminalTheme } from '../lib/terminalThemes.ts';
 import type {
@@ -477,8 +477,9 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(
         selDisp.dispose();
         if (wsRef.current) {
           try {
-            // Tab closed on purpose: end the shell instead of leaving it running
-            if (wsRef.current.readyState === WebSocket.OPEN) {
+            // Tab closed on purpose: end the shell instead of leaving it running.
+            // Not when the login ran out: the shell waits for you to sign back in.
+            if (wsRef.current.readyState === WebSocket.OPEN && !isSignedOut()) {
               wsRef.current.send(JSON.stringify({ type: 'close' }));
             }
             wsRef.current.close();

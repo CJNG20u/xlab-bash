@@ -104,6 +104,8 @@ export interface AuthStatus {
   username?: string;
   encryptionKeyConfigured: boolean;
   envAuthActive: boolean;
+  /** Why this browser's previous login was refused (expired / revoked / invalid) */
+  signedOutReason?: string;
 }
 
 export interface HostKeyPrompt {
