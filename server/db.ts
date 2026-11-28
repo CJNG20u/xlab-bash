@@ -201,6 +201,20 @@ function seedDefaults() {
       '1'
     );
   }
+
+  // One-time migration: wide arrow row on top, Ctrl/Alt/Tab on the bottom row
+  const migratedV5 = db
+    .prepare('SELECT value FROM app_config WHERE key = ?')
+    .get('migration_xlab_v5_nav_row');
+  if (!migratedV5) {
+    db.prepare(
+      'UPDATE keyboard_layouts SET name = ?, layout_json = ?, updated_at = ? WHERE id = ?'
+    ).run('xlab-bash Big Keys', JSON.stringify(DEFAULT_PC_6ROW_LAYOUT), Date.now(), 'default-pc-6row');
+    db.prepare('INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)').run(
+      'migration_xlab_v5_nav_row',
+      '1'
+    );
+  }
 }
 
 seedDefaults();

@@ -31,22 +31,33 @@ export const DEFAULT_SETTINGS: AppSettings = {
 /**
  * Big-key layout for phones (thumbs, not styluses).
  *
- * Row 1 is a fixed control row (Esc, Tab, Ctrl, Alt and the arrows) that stays the
- * same on every page, so those keys are always in the same place. Letter rows hold
- * only letters, like a phone keyboard, so every key is wide enough to hit.
+ * Top row: Esc, four wide arrow keys and the 123/ABC page switch.
+ * Bottom row: Ctrl, Alt, Tab, space and Enter. Both stay the same on every page,
+ * so those keys never move. Letter rows hold only letters, like a phone keyboard.
  * Numbers and symbols live on the 123 and #+= pages.
  */
-const CONTROL_ROW = (prefix: string): KeyboardRow => ({
+const CONTROL_ROW = (prefix: string, toggleLabel: string): KeyboardRow => ({
   id: `${prefix}-control`,
   keys: [
     { id: `${prefix}-esc`, label: 'Esc', code: 'Escape', kind: 'special' },
-    { id: `${prefix}-tab`, label: 'Tab', code: 'Tab', kind: 'special' },
-    { id: `${prefix}-ctrl`, label: 'Ctrl', code: 'ControlLeft', kind: 'modifier', modifier: 'ctrl', width: 1.15 },
-    { id: `${prefix}-alt`, label: 'Alt', code: 'AltLeft', kind: 'modifier', modifier: 'alt' },
-    { id: `${prefix}-left`, label: '←', code: 'ArrowLeft', kind: 'special', repeatable: true },
-    { id: `${prefix}-up`, label: '↑', code: 'ArrowUp', kind: 'special', repeatable: true },
-    { id: `${prefix}-down`, label: '↓', code: 'ArrowDown', kind: 'special', repeatable: true },
-    { id: `${prefix}-right`, label: '→', code: 'ArrowRight', kind: 'special', repeatable: true },
+    { id: `${prefix}-left`, label: '←', code: 'ArrowLeft', kind: 'special', width: 1.6, repeatable: true },
+    { id: `${prefix}-up`, label: '↑', code: 'ArrowUp', kind: 'special', width: 1.6, repeatable: true },
+    { id: `${prefix}-down`, label: '↓', code: 'ArrowDown', kind: 'special', width: 1.6, repeatable: true },
+    { id: `${prefix}-right`, label: '→', code: 'ArrowRight', kind: 'special', width: 1.6, repeatable: true },
+    { id: `${prefix}-toggle`, label: toggleLabel, code: 'FnToggle', kind: 'fn_toggle', width: 1.2 },
+  ],
+});
+
+/** Bottom row on every page: Ctrl, Alt, Tab, wide space, one symbol, Enter. */
+const BOTTOM_ROW = (prefix: string, symbol: KeyDef): KeyboardRow => ({
+  id: `${prefix}-bottom`,
+  keys: [
+    { id: `${prefix}-ctrl`, label: 'Ctrl', code: 'ControlLeft', kind: 'modifier', modifier: 'ctrl', width: 1.3 },
+    { id: `${prefix}-alt`, label: 'Alt', code: 'AltLeft', kind: 'modifier', modifier: 'alt', width: 1.1 },
+    { id: `${prefix}-tab`, label: 'Tab', code: 'Tab', kind: 'special', width: 1.1 },
+    { id: `${prefix}-space`, label: 'Space', code: 'Space', kind: 'space', width: 3.5, repeatable: true },
+    symbol,
+    { id: `${prefix}-enter`, label: '↵', code: 'Enter', kind: 'special', width: 2 },
   ],
 });
 
@@ -54,7 +65,7 @@ const sym = (id: string, label: string, code: string): KeyDef => ({ id, label, c
 
 export const DEFAULT_PC_6ROW_LAYOUT: KeyboardLayoutData = {
   rows: [
-    CONTROL_ROW('k'),
+    CONTROL_ROW('k', '123'),
     {
       id: 'row-qwerty',
       keys: [
@@ -100,23 +111,14 @@ export const DEFAULT_PC_6ROW_LAYOUT: KeyboardLayoutData = {
         { id: 'k-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
       ],
     },
-    {
-      id: 'row-bottom',
-      keys: [
-        { id: 'k-num-toggle', label: '123', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
-        { id: 'k-slash', label: '/', shiftLabel: '?', code: 'Slash', kind: 'char' },
-        { id: 'k-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
-        { id: 'k-dot', label: '.', shiftLabel: '>', code: 'Period', kind: 'char' },
-        { id: 'k-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
-      ],
-    },
+    BOTTOM_ROW('k', { id: 'k-dot', label: '.', shiftLabel: '>', code: 'Period', kind: 'char' }),
   ],
 };
 
 /** 123 page: digits and the symbols used most in a shell. */
 export const NUMBERS_LAYER_LAYOUT: KeyboardLayoutData = {
   rows: [
-    CONTROL_ROW('n'),
+    CONTROL_ROW('n', 'ABC'),
     {
       id: 'num-digits',
       keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'].map((d) =>
@@ -152,23 +154,14 @@ export const NUMBERS_LAYER_LAYOUT: KeyboardLayoutData = {
         { id: 'n-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
       ],
     },
-    {
-      id: 'num-bottom',
-      keys: [
-        { id: 'n-abc', label: 'ABC', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
-        sym('n-under', '_', 'Underscore'),
-        { id: 'n-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
-        sym('n-eq', '=', 'Equal'),
-        { id: 'n-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
-      ],
-    },
+    BOTTOM_ROW('n', sym('n-eq', '=', 'Equal')),
   ],
 };
 
 /** #+= page: brackets and rarer symbols, plus Home / End / PgUp / PgDn. */
 export const SYMBOLS_LAYER_LAYOUT: KeyboardLayoutData = {
   rows: [
-    CONTROL_ROW('s'),
+    CONTROL_ROW('s', 'ABC'),
     {
       id: 'sym-brackets',
       keys: [
@@ -210,16 +203,7 @@ export const SYMBOLS_LAYER_LAYOUT: KeyboardLayoutData = {
         { id: 's-bksp', label: '⌫', code: 'Backspace', kind: 'special', width: 1.5, repeatable: true },
       ],
     },
-    {
-      id: 'sym-bottom',
-      keys: [
-        { id: 's-abc', label: 'ABC', code: 'FnToggle', kind: 'fn_toggle', width: 1.5 },
-        sym('s-minus', '-', 'Minus'),
-        { id: 's-space', label: 'Space', code: 'Space', kind: 'space', width: 4, repeatable: true },
-        sym('s-colon', ':', 'Colon'),
-        { id: 's-enter', label: '↵', code: 'Enter', kind: 'special', width: 2 },
-      ],
-    },
+    BOTTOM_ROW('s', sym('s-colon', ':', 'Colon')),
   ],
 };
 

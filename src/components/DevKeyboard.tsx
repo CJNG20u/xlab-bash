@@ -1,4 +1,12 @@
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+const ARROW_ICONS: Record<string, typeof ChevronUp> = {
+  ArrowLeft: ChevronLeft,
+  ArrowUp: ChevronUp,
+  ArrowDown: ChevronDown,
+  ArrowRight: ChevronRight,
+};
 import { NUMBERS_LAYER_LAYOUT, SYMBOLS_LAYER_LAYOUT } from '../lib/defaultLayout.ts';
 import { resolveKeySequence, type ActiveModifiers } from '../lib/keySequences.ts';
 import type { KeyDef, KeyboardLayoutData, ModifierType } from '../types/index.ts';
@@ -458,7 +466,17 @@ export const DevKeyboard: React.FC<DevKeyboardProps> = ({
                           : 'text-[21px] font-medium'
                       }`}
                     >
-                      {isSpace ? (spaceScrubbing ? '← cursor →' : 'space') : primary}
+                      {isSpace ? (
+                        spaceScrubbing ? '← cursor →' : 'space'
+                      ) : ARROW_ICONS[key.code] ? (
+                        React.createElement(ARROW_ICONS[key.code], {
+                          className: 'w-6 h-6',
+                          strokeWidth: 2.5,
+                          'aria-label': key.code.replace('Arrow', ''),
+                        })
+                      ) : (
+                        primary
+                      )}
                     </span>
 
                     {/* Sticky modifier state indicator bar */}
